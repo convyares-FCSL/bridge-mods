@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.1'
+const VERSION = '0.2.2'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -14,7 +14,8 @@ let P = DARK
 type Status = 'PASS' | 'FAIL' | 'PARTIAL' | 'WAIT' | 'RUN' | 'OBSERVE'
 type Res = { s: Status; d: string }
 const res: Record<string, Res> = {}
-const set = ($: any, id: string, s: Status, d: string) => { res[id] = { s, d }; void note($, `${id} ${s} ${d}`); $.ui.invalidate('ui.render') }
+const viaOf: Record<string, string> = { t1b: 'clickup_filter_tasks', t1c: 'outlook_calendar_search', t1d: 'read_resource' }
+const set = ($: any, id: string, s: Status, d: string) => { const v = viaOf[id] && lastVia[viaOf[id]!]; if (v && s === 'PASS') d += ` [via ${v}]`; res[id] = { s, d }; void note($, `${id} ${s} ${d}`); $.ui.invalidate('ui.render') }
 
 let log = ''
 const note = async ($: any, msg: string) => { log += `${new Date().toISOString()} ${msg}\n`; try { await $.fs.write(DIAG, log) } catch {} }
@@ -30,6 +31,9 @@ let collapses = 0
 let reopens = 0
 let trySlash = false
 let resizing = false
+let paused = false
+let byButton = false
+const lastVia: Record<string, string> = {}
 let lastOpen = '(none yet)'
 const keys: Record<string, number> = { b: 0, c: 0, m: 0, e: 0, slash: 0 }
 let capture = ''
@@ -71,13 +75,22 @@ const call = async ($: any, tool: string, args: Record<string, unknown>) => {
   const srv = serverOf(tool)
   if (!srv) throw new Error(`no connected server exposes ${tool}`)
   let r: any
+  let via = 'mcp.call'
   try { r = await $.mcp.call(srv, tool, args) } catch (e) {
     // auto mode's classifier can answer "no verdict" and says to issue the call once more as-is
     if (!/classifier/i.test(err(e))) throw e
     await note($, `retrying ${tool} after: ${err(e).slice(0, 120)}`)
     await $.clock.sleep(800)
-    r = await $.mcp.call(srv, tool, args)
+    try { r = await $.mcp.call(srv, tool, args); via = 'mcp.call retry' } catch (e2) {
+      if (!/classifier/i.test(err(e2))) throw e2
+      // the other route: the model's own tool path, with its permission check
+      await note($, `falling back to $.tool.call for ${tool}`)
+      const t: any = await $.tool.call({ tool: `mcp__${srv}__${tool}`, ...args })
+      r = { content: [{ type: 'text', text: t?.text ?? JSON.stringify(t) }], isError: t?.isError }
+      via = 'tool.call'
+    }
   }
+  lastVia[tool] = via
   if (r?.isError) throw new Error(`${tool}: ${textOf(r).slice(0, 300)}`)
   return r
 }
@@ -333,7 +346,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'bridge-width', description: 'Bridge test: request a pane width in columns, e.g. /bridge-width 90', argumentHint: '<columns>' })
     await $.command.register({ name: 'bridge-run', description: 'Bridge test: re-run the connector, vault and theme tests' })
     $.ui.status(`Bridge test v${VERSION} loaded · /bridge opens the pane`)
-    $.clock.every(1000, () => { $.ui.invalidate('ui.render') })
+    $.clock.every(1000, () => { if (!paused) $.ui.invalidate('ui.render') })
     const r = await next(e)
     void (async () => {
       const opened = await openPane($)
@@ -371,7 +384,7 @@ export const register: Register = on => {
   on('ui.close', async ($, e: any, next) => {
     if (e?.id === PANE) {
       isOpen = false
-      if (!resizing) collapses++
+      if (!resizing && !byButton) collapses++
       lastStatus = `Bridge test · pane closed (collapsed ${collapses}×) · /bridge reopens`
       $.ui.status(lastStatus)
     }
@@ -438,7 +451,7 @@ export const register: Register = on => {
         </Box>
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           <Button key="runall" label="Run all tests" variant="primary" onPress={() => { void runAll($) }} />
-          {hk('c', 'Collapse (C)', () => { void closePane($) })}
+          {hk('c', 'Collapse (C)', () => { byButton = true; collapses++; void closePane($).finally(() => { byButton = false }) })}
           {hk('m', 'Run morning (M)', () => { void runMorning($) })}
           {hk('b', 'Board key (B)', () => {})}
           {hk('e', 'Evening key (E, counts only)', () => {})}
@@ -513,6 +526,7 @@ export const register: Register = on => {
             {sub('t11c', 'CPU')}
             <Box flexDirection="row" gap={1}>
               <Button key="cpu" label="Sample CPU" onPress={() => { void sampleCpu($) }} />
+              <Button key="pause" label={paused ? 'Resume 1 s redraw' : 'Pause 1 s redraw'} onPress={() => { paused = !paused; $.ui.invalidate('ui.render') }} />
               <Button key="reset" label="Reset stats" onPress={() => { Object.assign(stats, { renders: 0, sumMs: 0, maxMs: 0, maxGap: 0, last: 0, since: Date.now() }) }} />
             </Box>
           </Box>
