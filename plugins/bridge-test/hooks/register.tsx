@@ -108,7 +108,7 @@ export const register: Register = on => {
           {row('Focused', p.isFocused ? 'yes' : 'no')}
           {row('Opens', String(opens))}
         </Box>
-        {Svg ? <Svg source={ring} alt="Animated test ring" interactive width={120} height={120} /> : <Text color={C.amber}>No Svg element on this surface</Text>}
+        {Svg ? <Svg source={ring} alt="Animated test ring" isInteractive width={120} height={120} /> : <Text color={C.amber}>No Svg element on this surface</Text>}
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           <Button key="narrow" label="Narrower" onPress={() => { wantCols = Math.max(24, wantCols - 20); void openPane($) }} />
           <Button key="wide" label="Wider" variant="primary" onPress={() => { wantCols += 20; void openPane($) }} />
