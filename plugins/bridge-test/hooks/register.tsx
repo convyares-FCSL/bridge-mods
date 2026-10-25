@@ -1,10 +1,11 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.4'
+const VERSION = '0.2.5'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
-const DIAG = '/tmp/bridge-test-diag.log'
+// one file per session: two sessions writing one file overwrite each other
+const DIAG = `/tmp/bridge-test-diag-${Date.now().toString(36)}.log`
 
 // hud-* tokens from the Bridge design system (tokens.json), dark and daylight.
 const DARK = { field: '#060a12', panel: '#0a1120', line: '#1b3550', ink: '#dcebf5', muted: '#7fa3bf', accent: '#5fd3ff', asoft: '#0f2236', seg: '#9fd9ff', ok: '#4fe3b0', amber: '#ffb347', red: '#ff5e5e' }

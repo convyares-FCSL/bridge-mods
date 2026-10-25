@@ -15,6 +15,6 @@ Throwaway test mod for Carl's Bridge companion. v0.2 draws one pane, styled with
 11. Redraw cost (render time, gaps, CPU sample)
 12. Update flow (version, load time, plugin root)
 
-Commands: `/bridge` toggles the pane, `/bridge-width <columns>` requests a width, `/bridge-run` re-runs the tests. Typing `bridge` also toggles it. Diagnostics go to `/tmp/bridge-test-diag.log`.
+Commands: `/bridge` toggles the pane, `/bridge-width <columns>` requests a width, `/bridge-run` re-runs the tests. Typing `bridge` also toggles it. Diagnostics go to `/tmp/bridge-test-diag-*.log`.
 
 Delete once the real companion is built.
