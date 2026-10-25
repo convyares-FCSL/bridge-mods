@@ -1,1 +1,1 @@
-{ "name": "bridge-test", "version": "0.1.0", "description": "Throwaway test for the Bridge companion pane: width, collapse, placement beside an artifact, SVG rendering." }
+{ "name": "bridge-test", "version": "0.2.0", "description": "Throwaway test for the Bridge companion: connectors, vault, persistence, collapse, hotkeys, theme, prompt, rich SVG, links, redraw cost." }
