@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.7'
+const VERSION = '0.2.8'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -554,10 +554,11 @@ export const register: Register = on => {
         ))}
         {(() => {
           const bc = Number(p.bodyColumns ?? 60)
-          const ncol = bc >= 150 ? 3 : bc >= 90 ? 2 : 1
+          const ncol = bc >= 150 ? 3 : bc >= 60 ? 2 : 1
           const cellW = Math.max(20, Math.floor((bc - 4) / ncol) - 3)
-          const big = Math.max(100, Math.min(360, cellW * 6))
-          res.t13 = { s: 'OBSERVE', d: `Wide mode. Pane body ${bc} columns → ${ncol} column${ncol > 1 ? 's' : ''} (breaks at 90 and 150). Drag the pane edge from narrow to full width and watch the cells reflow and the ring grow (now ${big}px). Tell me what clips, jumps, or breaks the chat.` }
+          // the clock changes size only at a breakpoint: resizing it continuously made it stutter
+          const big = ncol === 3 ? 280 : ncol === 2 ? 200 : 140
+          res.t13 = { s: 'OBSERVE', d: `Wide mode. Pane body ${bc} columns → ${ncol} column${ncol > 1 ? 's' : ''} (one under 60, two from 60, three from 150). The clock is ${big}px and changes only at a breakpoint. Drag the pane edge and tell me what stutters, clips, or breaks the chat.` }
           const cell = (title: string, body: any) => (
             <Box key={title} width={cellW} flexDirection="column" borderStyle="single" borderColor={P.line} backgroundColor={P.panel} padding={1} gap={1}>
               <Text color={P.accent} size="caption" weight="semibold">{title}</Text>
