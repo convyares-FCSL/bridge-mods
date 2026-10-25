@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.2'
+const VERSION = '0.2.3'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -33,6 +33,8 @@ let trySlash = false
 let resizing = false
 let paused = false
 let byButton = false
+let bandRenders = 0
+let themeOverride: 'auto' | 'dark' | 'light' = 'auto'
 const lastVia: Record<string, string> = {}
 let lastOpen = '(none yet)'
 const keys: Record<string, number> = { b: 0, c: 0, m: 0, e: 0, slash: 0 }
@@ -86,7 +88,9 @@ const call = async ($: any, tool: string, args: Record<string, unknown>) => {
       // the other route: the model's own tool path, with its permission check
       await note($, `falling back to $.tool.call for ${tool}`)
       const t: any = await $.tool.call({ tool: `mcp__${srv}__${tool}`, ...args })
-      r = { content: [{ type: 'text', text: t?.text ?? JSON.stringify(t) }], isError: t?.isError }
+      await note($, `tool.call ${tool} keys=${Object.keys(t ?? {}).join(',')} raw=${JSON.stringify(t).slice(0, 3000)}`)
+      const blocks = Array.isArray(t?.content) ? t.content : Array.isArray(t?.result?.content) ? t.result.content : [{ type: 'text', text: typeof t?.text === 'string' ? t.text : typeof t?.result === 'string' ? t.result : JSON.stringify(t?.result ?? t) }]
+      r = { content: blocks, isError: t?.isError }
       via = 'tool.call'
     }
   }
@@ -190,7 +194,7 @@ async function t7($: any) {
   try {
     const row: any = (await $.config.list()).find((r: any) => r.key === 'theme')
     themeRaw = row ? String(row.value) : 'no theme row'
-    P = /light|day/i.test(themeRaw) ? DAY : DARK
+    P = themeOverride === 'light' ? DAY : themeOverride === 'dark' ? DARK : /light|day/i.test(themeRaw) ? DAY : DARK
     const isAuto = /auto/i.test(themeRaw)
     set($, 't7', row && !isAuto ? 'PASS' : 'PARTIAL', `$.config.list theme = "${themeRaw}" → ${P === DAY ? 'daylight' : 'dark'} palette${isAuto ? ' (value is "auto": it names a setting, not the resolved light or dark, so the mod cannot tell which the app shows)' : ''}. The render event has no theme field (only surface, viewport, props). Colors given as theme keys follow the app's theme.`)
   } catch (e) { set($, 't7', 'FAIL', err(e)) }
@@ -496,7 +500,12 @@ export const register: Register = on => {
             <Text color={P.muted} size="footnote">Counters also move on a mouse click; press the key only. Focus: {p.isFocused ? 'pane has it' : 'pane does not (click it or use the focus chord)'}</Text>
           </Box>
         ))}
-        {sec('t7', '7 · THEME', row('Palette now', P === DAY ? 'daylight' : 'dark'))}
+        {sec('t7', '7 · THEME', (
+          <Box flexDirection="column" gap={1}>
+            {row('Palette now', `${P === DAY ? 'daylight' : 'dark'} (override: ${themeOverride})`)}
+            <Button key="theme" label={`Theme: ${themeOverride}, press to change`} onPress={() => { themeOverride = themeOverride === 'auto' ? 'light' : themeOverride === 'light' ? 'dark' : 'auto'; P = themeOverride === 'light' ? DAY : themeOverride === 'dark' ? DARK : /light|day/i.test(themeRaw) ? DAY : DARK; ringCache.key = ''; $.ui.invalidate('ui.render') }} />
+          </Box>
+        ))}
         {sec('t8', '8 · PANE TO CHAT ($.prompt.submit)')}
         {sec('t9', '9 · RICH SVG', (
           <Box flexDirection="column" gap={1}>
@@ -559,13 +568,16 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e: any, next) => {
-    if (isOpen) return next(e)
+    bandRenders++
+    if (bandRenders % 30 === 1) void note($, `band render #${bandRenders} isOpen=${isOpen} surface=${e.surface} viewport=${JSON.stringify(e.viewport)} props=${JSON.stringify(e.props)}`)
     const { Box, Text, Button } = $.ui.resolve(e) as any
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Text color={P.accent} weight="semibold">BRIDGE</Text>
-        <Text color={P.muted}>{clock()} · pane collapsed ({collapses}×)</Text>
-        <Button key="reopen" label="Reopen" onPress={() => { reopens++; void openPane($) }} />
+        <Text color={P.muted}>{clock()} · pane {isOpen ? 'open' : 'collapsed'} ({collapses}×)</Text>
+        {isOpen
+          ? <Button key="collapse-band" label="Collapse" onPress={() => { byButton = true; collapses++; void closePane($).finally(() => { byButton = false }) }} />
+          : <Button key="reopen" label="Reopen" onPress={() => { reopens++; void openPane($) }} />}
       </Box>
     )
   })
