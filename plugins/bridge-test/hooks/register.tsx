@@ -41,7 +41,25 @@ export const register: Register = on => {
     await $.command.register({ name: 'bridge', description: 'Bridge test: open or close the pane' })
     await $.command.register({ name: 'bridge-width', description: 'Bridge test: request a pane width in columns, e.g. /bridge-width 90', argumentHint: '<columns>' })
     $.ui.status('Bridge test loaded · /bridge opens the pane')
-    $.clock.every(1000, () => { if (isOpen) $.ui.invalidate('ui.render') })
+    $.clock.every(1000, () => { $.ui.invalidate('ui.render') })
+    const r = await next(e)
+    void openPane($)
+    return r
+  })
+
+  // Fallback for apps that don't list mod commands: typing "bridge" (or "/bridge") toggles the pane.
+  on('prompt.submit', async ($, e: any, next) => {
+    const t = String(e.text ?? '').trim().toLowerCase()
+    if (t === 'bridge' || t === '/bridge') {
+      if (isOpen) await closePane($); else await openPane($)
+      return { drop: isOpen ? 'Bridge test pane opened' : 'Bridge test pane closed' }
+    }
+    const m = t.match(/^\/?bridge[- ]width\s+(\d+)$/)
+    if (m) {
+      wantCols = Math.max(24, parseInt(m[1], 10))
+      await openPane($)
+      return { drop: `Bridge test: requested ${wantCols} columns` }
+    }
     return next(e)
   })
 
