@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.8'
+const VERSION = '0.2.9'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -35,6 +35,7 @@ let resizing = false
 let paused = false
 let byButton = false
 let bandRenders = 0
+let slashResult = ''
 let scrollOffset = 0
 let themeOverride: 'auto' | 'dark' | 'light' = 'auto'
 const lastVia: Record<string, string> = {}
@@ -348,6 +349,7 @@ export const register: Register = on => {
     prevOpens = Number((await $.store.get('opens')) ?? 0)
     await $.store.set('opens', prevOpens + 1)
     if (typeof storedWidth === 'number') wantCols = storedWidth
+    slashResult = String((await $.store.get('slashResult')) ?? '')
     set($, 't4', prevOpens > 0 ? 'PASS' : 'PARTIAL', prevOpens > 0 ? `store survived: opens counter was ${prevOpens} before this start (now ${prevOpens + 1}); width restored to ${wantCols} cols` : `first run: counter now 1, width ${wantCols} saved. Restart the session (or hot reload) to confirm it persists.`)
     await $.command.register({ name: 'bridge', description: 'Bridge test: open or close the pane' })
     await $.command.register({ name: 'bridge-width', description: 'Bridge test: request a pane width in columns, e.g. /bridge-width 90', argumentHint: '<columns>' })
@@ -464,7 +466,7 @@ export const register: Register = on => {
           {hk('m', 'Run morning (M)', () => { void runMorning($) })}
           {hk('b', 'Board key (B)', () => {})}
           {hk('e', 'Evening key (E, counts only)', () => {})}
-          <Button key="slash" label={trySlash ? "'/' hotkey armed" : "Arm '/' hotkey"} onPress={() => { trySlash = true; void note($, "arming '/' hotkey: if the pane goes blank run /bridge twice to reset"); $.ui.invalidate('ui.render') }} />
+          {slashResult ? null : <Button key="slash" label={trySlash ? "'/' hotkey armed" : "Arm '/' hotkey"} onPress={() => { trySlash = true; slashResult = "refused: arming it blanked the whole pane (\"nothing to show yet\")"; void $.store.set('slashResult', slashResult); void note($, "arming '/' hotkey: pane tree refused; run /bridge twice to reset"); $.ui.invalidate('ui.render') }} />}
           {trySlash ? <Button key="hk-slash" label="Slash (/)" hotkey="/" onPress={() => { keys.slash = (keys.slash ?? 0) + 1; $.ui.invalidate('ui.render') }} /> : null}
         </Box>
 
@@ -501,7 +503,7 @@ export const register: Register = on => {
         {sec('t6', '6 · HOTKEYS (press the key with the pane focused)', (
           <Box flexDirection="column">
             {row('B / C / M / E', `${keys.b} / ${keys.c} / ${keys.m} / ${keys.e}`)}
-            {row("'/'", trySlash ? `armed, presses ${keys.slash ?? 0}` : "not armed. API docs say hotkey is one digit or lowercase letter, so '/' is refused")}
+            {row("'/'", slashResult ? `FAIL, ${slashResult}` : trySlash ? `armed, presses ${keys.slash ?? 0}` : "not armed. API docs say hotkey is one digit or lowercase letter, so '/' is refused")}
             <Text color={P.muted} size="footnote">Counters also move on a mouse click; press the key only. Focus: {p.isFocused ? 'pane has it' : 'pane does not (click it or use the focus chord)'}</Text>
           </Box>
         ))}
