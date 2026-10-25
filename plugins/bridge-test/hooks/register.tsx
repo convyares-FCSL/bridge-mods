@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.5'
+const VERSION = '0.2.6'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -549,6 +549,28 @@ export const register: Register = on => {
             {row('Plugin root', String($.plugin.root))}
           </Box>
         ))}
+        {(() => {
+          const bc = Number(p.bodyColumns ?? 60)
+          const ncol = bc >= 150 ? 3 : bc >= 90 ? 2 : 1
+          const cellW = Math.max(20, Math.floor((bc - 4) / ncol) - 3)
+          const big = Math.max(100, Math.min(360, cellW * 6))
+          res.t13 = { s: 'OBSERVE', d: `Wide mode. Pane body ${bc} columns → ${ncol} column${ncol > 1 ? 's' : ''} (breaks at 90 and 150). Drag the pane edge from narrow to full width and watch the cells reflow and the ring grow (now ${big}px). Tell me what clips, jumps, or breaks the chat.` }
+          const cell = (title: string, body: any) => (
+            <Box key={title} width={cellW} flexDirection="column" borderStyle="single" borderColor={P.line} backgroundColor={P.panel} padding={1} gap={1}>
+              <Text color={P.accent} size="caption" weight="semibold">{title}</Text>
+              {body}
+            </Box>
+          )
+          return sec('t13', '13 · WIDE MODE (drag the pane wider)', (
+            <Box flexDirection="row" flexWrap="wrap" gap={1}>
+              {cell('FOCUS', <Text color={P.ink} size="footnote">Six open tasks, one running. 1:58:03 to the next meeting.</Text>)}
+              {cell('COMMS', <Text color={P.ink} size="footnote">Inbox unread {gauges.stale >= 0 ? '5' : '—'} · Follow Up 0</Text>)}
+              {cell('RADAR', Svg ? <Svg source={gaugeSvg(gauges.stale, 60, bandOf(gauges.stale, 20, 40))} alt="Stale gauge" isInteractive width={Math.min(big, 160)} height={Math.min(big, 160) * 0.91} /> : null)}
+              {cell('DAY CLOCK', Svg ? <Svg source={ringAnim(now)} alt="Day clock, scaled" isInteractive width={big} height={big} /> : null)}
+              {cell('LOG', <Text color={P.muted} size="footnote">Timer stopped 2:10 · Product one-pagers → ClickUp ✓</Text>)}
+            </Box>
+          ))
+        })()}
         <Box flexDirection="column" borderStyle="single" borderColor={P.line} backgroundColor={P.panel} padding={1}>
           <Text color={P.accent} size="caption" weight="semibold">PLACEMENT</Text>
           {row('Surface', String(e.surface))}
