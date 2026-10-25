@@ -4,6 +4,9 @@ const PANE = 'bridge-test'
 const PREVIEWS = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const C = { field: '#060a12', panel: '#0a1120', line: '#1b3550', ink: '#dcebf5', muted: '#7fa3bf', accent: '#5fd3ff', ok: '#4fe3b0', amber: '#ffb347' }
 
+const DIAG = '/tmp/bridge-test-diag.log'
+let log = ''
+const note = async ($: any, msg: string) => { log += `${new Date().toISOString()} ${msg}\n`; try { await $.fs.write(DIAG, log) } catch {} }
 let isOpen = false
 let wantCols = 60
 let opens = 0
@@ -23,7 +26,10 @@ const ring = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" v
 
 async function openPane($: any, focus = false) {
   opens++
-  const r = await $.ui.open({ id: PANE, title: 'Bridge (test)', columns: wantCols, ...(focus ? { focus: true } : {}) })
+  await note($, `open requested cols=${wantCols}`)
+  let r: any
+  try { r = await $.ui.open({ id: PANE, title: 'Bridge (test)', columns: wantCols, ...(focus ? { focus: true } : {}) }) } catch (err) { await note($, `open threw ${String(err)}`); throw err }
+  await note($, `open result ${JSON.stringify(r)}`)
   isOpen = true
   $.ui.status(`Bridge test · pane ${r?.isPlaced ? 'placed' : 'not placed'} · /bridge toggles`)
   $.ui.invalidate('ui.render')
@@ -37,7 +43,8 @@ async function closePane($: any) {
 }
 
 export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
+  on('session.start', async ($, e: any, next) => {
+    await note($, `session.start surface=${e.surface} keys=${Object.keys(e).join(',')}`)
     await $.command.register({ name: 'bridge', description: 'Bridge test: open or close the pane' })
     await $.command.register({ name: 'bridge-width', description: 'Bridge test: request a pane width in columns, e.g. /bridge-width 90', argumentHint: '<columns>' })
     $.ui.status('Bridge test loaded · /bridge opens the pane')
@@ -83,6 +90,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e: any) => {
+    await note($, `pane render surface=${e.surface} props=${JSON.stringify(e.props)} viewport=${JSON.stringify(e.viewport)}`)
     const { Box, Text, Button, Link, Svg } = $.ui.resolve(e) as any
     const p = e.props ?? {}
     const v = e.viewport ?? {}
