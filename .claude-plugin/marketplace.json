@@ -2,6 +2,7 @@
   "name": "bridge-mods",
   "owner": { "name": "Carl von Ayres" },
   "plugins": [
+    { "name": "bridge", "source": "./plugins/bridge", "description": "Bridge: the engineering command pane beside the chat." },
     { "name": "bridge-test", "source": "./plugins/bridge-test", "description": "Throwaway test of the Bridge companion pane." }
   ]
 }
