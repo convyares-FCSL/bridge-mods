@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.0'
+const VERSION = '0.2.1'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -29,6 +29,8 @@ let lastStatus = ''
 let collapses = 0
 let reopens = 0
 let trySlash = false
+let resizing = false
+let lastOpen = '(none yet)'
 const keys: Record<string, number> = { b: 0, c: 0, m: 0, e: 0, slash: 0 }
 let capture = ''
 let servers: Record<string, string[]> = {}
@@ -68,7 +70,14 @@ const serverOf = (tool: string) => Object.keys(servers).find(s => servers[s]!.in
 const call = async ($: any, tool: string, args: Record<string, unknown>) => {
   const srv = serverOf(tool)
   if (!srv) throw new Error(`no connected server exposes ${tool}`)
-  const r: any = await $.mcp.call(srv, tool, args)
+  let r: any
+  try { r = await $.mcp.call(srv, tool, args) } catch (e) {
+    // auto mode's classifier can answer "no verdict" and says to issue the call once more as-is
+    if (!/classifier/i.test(err(e))) throw e
+    await note($, `retrying ${tool} after: ${err(e).slice(0, 120)}`)
+    await $.clock.sleep(800)
+    r = await $.mcp.call(srv, tool, args)
+  }
   if (r?.isError) throw new Error(`${tool}: ${textOf(r).slice(0, 300)}`)
   return r
 }
@@ -134,7 +143,7 @@ async function scan($: any, dir: string, state: { files: number; stale: number; 
   try { ents = await $.fs.list(dir) } catch { return }
   for (const en of ents) {
     if (state.files >= 800) { state.capped = true; return }
-    if (en.kind === 'directory') { if (!/^(\.|_attachments$|Claude outputs$)/.test(en.name)) await scan($, `${dir}/${en.name}`, state); continue }
+    if (en.kind === 'dir') { if (!/^(\.|_attachments$|Claude outputs$)/.test(en.name)) await scan($, `${dir}/${en.name}`, state); continue }
     if (!en.name.endsWith('.md')) continue
     state.files++
     try { if (/review:\s*stale/i.test(String(await $.fs.read(`${dir}/${en.name}`)))) state.stale++ } catch {}
@@ -169,7 +178,8 @@ async function t7($: any) {
     const row: any = (await $.config.list()).find((r: any) => r.key === 'theme')
     themeRaw = row ? String(row.value) : 'no theme row'
     P = /light|day/i.test(themeRaw) ? DAY : DARK
-    set($, 't7', row ? 'PASS' : 'PARTIAL', `$.config.list theme = "${themeRaw}" → ${P === DAY ? 'daylight' : 'dark'} palette. The render event carries no theme field (only surface, viewport, props).`)
+    const isAuto = /auto/i.test(themeRaw)
+    set($, 't7', row && !isAuto ? 'PASS' : 'PARTIAL', `$.config.list theme = "${themeRaw}" → ${P === DAY ? 'daylight' : 'dark'} palette${isAuto ? ' (value is "auto": it names a setting, not the resolved light or dark, so the mod cannot tell which the app shows)' : ''}. The render event has no theme field (only surface, viewport, props). Colors given as theme keys follow the app's theme.`)
   } catch (e) { set($, 't7', 'FAIL', err(e)) }
 }
 
@@ -183,9 +193,9 @@ async function runMorning($: any) {
         const msgs: any[] = await $.session.messages()
         const recent = msgs.slice(-12)
         const tu = recent.flatMap(m => m.toolUses ?? [])
-        const skill = tu.find((u: any) => /skill/i.test(String(u.name)) && /morning|day-planner/i.test(JSON.stringify(u.input ?? u)))
-        const sent = recent.some(m => m.role === 'user' && /^morning$/i.test(String(m.text ?? '').trim()))
-        set($, 't8', skill ? 'PASS' : sent ? 'PARTIAL' : 'FAIL', `${sent ? 'a user turn "morning" is in the transcript' : 'no "morning" user turn found'}; ${skill ? `Skill tool use seen: ${skill.name}` : `no Skill tool use for morning among ${tu.length} recent tool uses (names: ${tu.map((u: any) => u.name).slice(0, 6).join(', ') || 'none'})`}`)
+        const skill = tu.find((u: any) => /skill/i.test(JSON.stringify(u)) && /morning|day-planner/i.test(JSON.stringify(u)))
+        const sent = recent.some(m => m.role === 'user' && /morning/i.test(String(m.text ?? '')))
+        set($, 't8', skill ? 'PASS' : sent ? 'PARTIAL' : 'FAIL', `${sent ? 'a user turn containing "morning" is in the transcript' : 'no user turn containing "morning" in the last 12 messages'}; ${skill ? 'Skill tool use for the morning brief seen' : `no Skill tool use for morning among ${tu.length} recent tool uses`}. (The model may need longer than 30 s; press Run morning and read the transcript.) Shape of a tool use: ${JSON.stringify(tu[0] ?? {}).slice(0, 120)}`)
       } catch (e) { set($, 't8', 'PARTIAL', `submitted; could not read transcript: ${err(e)}`) }
     })
   } catch (e) { set($, 't8', 'FAIL', `$.prompt.submit threw: ${err(e)}`) }
@@ -216,10 +226,18 @@ async function openPane($: any, focus = false) {
   let r: any
   try { r = await $.ui.open({ id: PANE, title: 'Bridge (test)', columns: wantCols, ...(focus ? { focus: true } : {}) }) } catch (e) { await note($, `open threw ${err(e)}`); throw e }
   isOpen = true
+  lastOpen = `asked ${wantCols}, ${JSON.stringify(r)}`
   lastStatus = `Bridge test v${VERSION} · pane ${r?.isPlaced ? 'placed' : 'not placed'} · /bridge toggles`
   $.ui.status(lastStatus)
   $.ui.invalidate('ui.render')
   return r
+}
+// ui.open on an open id only retitles it, so a new width needs a close first.
+async function resizePane($: any, cols: number) {
+  wantCols = Math.max(24, cols)
+  resizing = true
+  try { await $.ui.close({ id: PANE }); await $.clock.sleep(150) } finally { resizing = false }
+  return openPane($)
 }
 async function closePane($: any) {
   await $.ui.close({ id: PANE })
@@ -231,7 +249,9 @@ async function closePane($: any) {
 
 // ---- SVG --------------------------------------------------------------------
 
-function ringSvg(now: Date) {
+// anim: the hand turns and the seconds ring sweeps by SMIL, so the source holds still for a minute.
+// not anim: redrawn by the second, as v0.2.0 did (which drew nothing in the interactive frame).
+function ringSvg(now: Date, anim: boolean) {
   const c = 50, R = 43
   const ang = (h: number) => ((h - 12) / 24) * 2 * Math.PI - Math.PI / 2
   const pt = (h: number, r: number): [number, number] => [c + r * Math.cos(ang(h)), c + r * Math.sin(ang(h))]
@@ -244,13 +264,28 @@ function ringSvg(now: Date) {
   s += arc(6, 20, R + 2, 1.5, P.muted, 0.35)
   for (let i = 0; i < 24; i++) { const [x1, y1] = pt(i, R), [x2, y2] = pt(i, R - (i % 6 ? 3 : 6)); s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${P.muted}" stroke-width="${i % 6 ? 0.6 : 1}"/>` }
   for (const e of events) s += arc(e.start, Math.max(e.end, e.start + 0.1), R - 8, 5, P.accent, 1)
-  const [hx, hy] = pt(h, R - 1), [ix, iy] = pt(h, 22)
-  s += `<line x1="${ix.toFixed(1)}" y1="${iy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" stroke="${P.accent}" stroke-width="1.5"/><circle cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="2.5" fill="${P.accent}"><animate attributeName="r" values="2.5;4;2.5" dur="2.4s" repeatCount="indefinite"/></circle>`
-  for (let i = 0; i < 60; i++) { const a = (i / 60) * 2 * Math.PI - Math.PI / 2, r1 = R - 22, r2 = R - 25; s += `<line x1="${(c + r1 * Math.cos(a)).toFixed(1)}" y1="${(c + r1 * Math.sin(a)).toFixed(1)}" x2="${(c + r2 * Math.cos(a)).toFixed(1)}" y2="${(c + r2 * Math.sin(a)).toFixed(1)}" stroke="${i <= sec ? P.accent : P.line}" stroke-width="1.5"/>` }
-  const nx = events.find(e => e.end > h)
-  const left = nx ? Math.max(0, Math.round((nx.start - h) * 3600)) : 0
-  s += `<text x="50" y="54" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="${P.ink}">${nx ? `${Math.floor(left / 3600)}:${f2(Math.floor((left % 3600) / 60))}:${f2(left % 60)}` : '--:--'}</text><text x="50" y="65" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="7" fill="${P.muted}">T-MINUS</text></svg>`
+  const [tx, ty] = pt(12, R - 1), [bx, by] = pt(12, 22)
+  const hand = `<line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="${P.accent}" stroke-width="1.5"/><circle cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="2.5" fill="${P.accent}"><animate attributeName="r" values="2.5;4;2.5" dur="2.4s" repeatCount="indefinite"/></circle>`
+  const deg = ((h - 12) / 24) * 360
+  s += anim
+    ? `<g transform="rotate(${deg.toFixed(2)} 50 50)"><animateTransform attributeName="transform" type="rotate" from="${deg.toFixed(2)} 50 50" to="${(deg + 360).toFixed(2)} 50 50" dur="86400s" repeatCount="indefinite"/>${hand}</g>`
+    : `<g transform="rotate(${deg.toFixed(2)} 50 50)">${hand}</g>`
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * 2 * Math.PI - Math.PI / 2, r1 = R - 22, r2 = R - 25
+    const xy = `x1="${(c + r1 * Math.cos(a)).toFixed(1)}" y1="${(c + r1 * Math.sin(a)).toFixed(1)}" x2="${(c + r2 * Math.cos(a)).toFixed(1)}" y2="${(c + r2 * Math.sin(a)).toFixed(1)}"`
+    s += anim
+      ? `<line ${xy} stroke="${P.line}" stroke-width="1.5"><animate attributeName="stroke" calcMode="discrete" values="${P.line};${P.accent}" keyTimes="0;${((i + 1) / 60).toFixed(4)}" dur="60s" begin="-${sec}s" repeatCount="indefinite"/></line>`
+      : `<line ${xy} stroke="${i <= sec ? P.accent : P.line}" stroke-width="1.5"/>`
+  }
+  s += `</svg>`
   return s
+}
+
+let ringCache = { key: '', src: '' }
+const ringAnim = (now: Date) => {
+  const key = `${P === DAY}:${events.length}:${Math.floor(now.getTime() / 60000)}`
+  if (ringCache.key !== key) ringCache = { key, src: ringSvg(now, true) }
+  return ringCache.src
 }
 
 function gaugeSvg(n: number, max: number, band: string) {
@@ -334,7 +369,12 @@ export const register: Register = on => {
   on('command.run', { command: 'bridge-run' }, async $ => { void runAll($); return { text: 'Re-running the bridge-test tests; watch the pane.' } })
 
   on('ui.close', async ($, e: any, next) => {
-    if (e?.id === PANE) { isOpen = false; lastStatus = 'Bridge test · pane closed · /bridge reopens'; $.ui.status(lastStatus) }
+    if (e?.id === PANE) {
+      isOpen = false
+      if (!resizing) collapses++
+      lastStatus = `Bridge test · pane closed (collapsed ${collapses}×) · /bridge reopens`
+      $.ui.status(lastStatus)
+    }
     return next(e)
   })
 
@@ -379,6 +419,14 @@ export const register: Register = on => {
     const hk = (k: string, label: string, fn: () => void) => <Button key={`hk-${k}`} label={label} hotkey={k} onPress={() => { keys[k] = (keys[k] ?? 0) + 1; fn(); $.ui.invalidate('ui.render') }} />
 
     const nx = events.find(ev => ev.end > hrs(now))
+    // statuses the pane can work out itself; the rest wait for what the person sees
+    res.t5 = { s: collapses > 0 && reopens > 0 ? 'PASS' : 'OBSERVE', d: `collapse closed the pane ${collapses}×, band Reopen pressed ${reopens}×; the status strip text is shown below (check it also appears under the prompt).` }
+    const pressed = Object.entries(keys).filter(([, n]) => n > 0).map(([k]) => k)
+    res.t6 = { s: pressed.length ? 'PARTIAL' : 'OBSERVE', d: `keys counted so far: ${pressed.join(', ') || 'none'}. Each Button draws its key as a chip; press each key with the pane focused and without the mouse.` }
+    res.t9 = { s: 'OBSERVE', d: 'Visual check. Ring A uses SMIL in the interactive frame and holds still for a minute; ring B is redrawn every second as an image. Tell me which of A and B draw.' }
+    res.t10 = { s: 'OBSERVE', d: 'Click the link and tell me where it opened.' }
+    res.t11 = { s: stats.renders > 600 && stats.maxMs < 20 ? 'PASS' : 'OBSERVE', d: `${stats.renders} renders, avg ${stats.renders ? (stats.sumMs / stats.renders).toFixed(1) : 0} ms, max ${stats.maxMs} ms. Gaps over 1 s happen when the window is hidden or busy; leave it open 10 minutes and tell me about flicker.` }
+    res.t12 = { s: 'OBSERVE', d: 'Installed from the marketplace cache, so the plugin root below shows the version folder in use. Tell me what you did to get this version.' }
     const out = (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={P.field}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
@@ -390,7 +438,7 @@ export const register: Register = on => {
         </Box>
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           <Button key="runall" label="Run all tests" variant="primary" onPress={() => { void runAll($) }} />
-          {hk('c', 'Collapse (C)', () => { collapses++; void closePane($) })}
+          {hk('c', 'Collapse (C)', () => { void closePane($) })}
           {hk('m', 'Run morning (M)', () => { void runMorning($) })}
           {hk('b', 'Board key (B)', () => {})}
           {hk('e', 'Evening key (E, counts only)', () => {})}
@@ -441,7 +489,8 @@ export const register: Register = on => {
           <Box flexDirection="column" gap={1}>
             <Text color={P.muted} size="footnote">Day clock: 60-segment seconds ring, now hand, {events.length} meeting arcs{nx ? `, next ${nx.subject} ${hm(nx.start)}` : ''}. Then a 270° gauge for stale notes ({gauges.stale}) and overdue ClickUp ({gauges.overdue}).</Text>
             <Box flexDirection="row" gap={2} alignItems="center">
-              {Svg ? <Svg source={ringSvg(now)} alt="Day clock ring" isInteractive width={100} height={100} /> : <Text color={P.amber}>No Svg element</Text>}
+              {Svg ? <Box flexDirection="column" alignItems="center"><Svg source={ringAnim(now)} alt="Day clock ring, SMIL" isInteractive width={100} height={100} /><Text color={P.muted} size="caption">A · SMIL, interactive</Text></Box> : <Text color={P.amber}>No Svg element</Text>}
+              {Svg ? <Box flexDirection="column" alignItems="center"><Svg source={ringSvg(now, false)} alt="Day clock ring, redrawn each second" width={100} height={100} /><Text color={P.muted} size="caption">B · per second, image</Text></Box> : null}
               {Svg ? <Svg source={gaugeSvg(gauges.stale, 60, bandOf(gauges.stale, 20, 40))} alt="Stale notes gauge" isInteractive width={92} height={84} /> : null}
               {Svg ? <Svg source={gaugeSvg(gauges.overdue, 10, bandOf(gauges.overdue, 2, 9))} alt="Overdue gauge" isInteractive width={92} height={84} /> : null}
             </Box>
@@ -481,10 +530,11 @@ export const register: Register = on => {
           {row('Placement', String(p.placement ?? '?'), p.placement === 'dock' ? P.ok : P.amber)}
           {row('Width asked', `${wantCols} cols`)}
           {row('Width got', `${p.bodyColumns ?? '?'} cols`)}
+          {row('Last open', lastOpen)}
           {row('Viewport', `${v.columns ?? '?'} × ${v.rows ?? '?'}`)}
           <Box flexDirection="row" gap={1}>
-            <Button key="narrow" label="Narrower" onPress={() => { wantCols = Math.max(24, wantCols - 20); void openPane($) }} />
-            <Button key="wide" label="Wider" onPress={() => { wantCols += 20; void openPane($) }} />
+            <Button key="narrow" label="Narrower" onPress={() => { void resizePane($, wantCols - 20) }} />
+            <Button key="wide" label="Wider" onPress={() => { void resizePane($, wantCols + 20) }} />
           </Box>
         </Box>
       </Box>
