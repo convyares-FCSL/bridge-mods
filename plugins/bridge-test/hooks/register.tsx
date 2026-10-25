@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.3'
+const VERSION = '0.2.4'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -89,6 +89,7 @@ const call = async ($: any, tool: string, args: Record<string, unknown>) => {
       await note($, `falling back to $.tool.call for ${tool}`)
       const t: any = await $.tool.call({ tool: `mcp__${srv}__${tool}`, ...args })
       await note($, `tool.call ${tool} keys=${Object.keys(t ?? {}).join(',')} raw=${JSON.stringify(t).slice(0, 3000)}`)
+      if (t?.deny) throw new Error(`tool.call denied: ${String(t.deny)}`)
       const blocks = Array.isArray(t?.content) ? t.content : Array.isArray(t?.result?.content) ? t.result.content : [{ type: 'text', text: typeof t?.text === 'string' ? t.text : typeof t?.result === 'string' ? t.result : JSON.stringify(t?.result ?? t) }]
       r = { content: blocks, isError: t?.isError }
       via = 'tool.call'
