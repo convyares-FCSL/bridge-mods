@@ -1,0 +1,7 @@
+{
+  "name": "bridge-mods",
+  "owner": { "name": "Carl von Ayres" },
+  "plugins": [
+    { "name": "bridge-test", "source": "./plugins/bridge-test", "description": "Throwaway test of the Bridge companion pane." }
+  ]
+}
