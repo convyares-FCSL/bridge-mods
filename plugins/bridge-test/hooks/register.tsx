@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.6'
+const VERSION = '0.2.7'
 const PANE = 'bridge-test'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -35,6 +35,7 @@ let resizing = false
 let paused = false
 let byButton = false
 let bandRenders = 0
+let scrollOffset = 0
 let themeOverride: 'auto' | 'dark' | 'light' = 'auto'
 const lastVia: Record<string, string> = {}
 let lastOpen = '(none yet)'
@@ -198,7 +199,7 @@ async function t7($: any) {
     themeRaw = row ? String(row.value) : 'no theme row'
     P = themeOverride === 'light' ? DAY : themeOverride === 'dark' ? DARK : /light|day/i.test(themeRaw) ? DAY : DARK
     const isAuto = /auto/i.test(themeRaw)
-    set($, 't7', row && !isAuto ? 'PASS' : 'PARTIAL', `$.config.list theme = "${themeRaw}" → ${P === DAY ? 'daylight' : 'dark'} palette${isAuto ? ' (value is "auto": it names a setting, not the resolved light or dark, so the mod cannot tell which the app shows)' : ''}. The render event has no theme field (only surface, viewport, props). Colors given as theme keys follow the app's theme.`)
+    set($, 't7', row && !isAuto ? 'PASS' : 'PARTIAL', `$.config.list theme = "${themeRaw}" → ${P === DAY ? 'daylight' : 'dark'} palette${isAuto ? ' (value is "auto": it names a setting, not the resolved light or dark, so the mod cannot tell which the app shows)' : ''}. The render event has no theme field (only surface, viewport, props). Colors given as theme keys follow the app's theme. Native controls (Input, Button) keep the app's own colours, so forcing a light palette on a dark app leaves their text unreadable: follow the app's theme instead of overriding it.`)
   } catch (e) { set($, 't7', 'FAIL', err(e)) }
 }
 
@@ -352,7 +353,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'bridge-width', description: 'Bridge test: request a pane width in columns, e.g. /bridge-width 90', argumentHint: '<columns>' })
     await $.command.register({ name: 'bridge-run', description: 'Bridge test: re-run the connector, vault and theme tests' })
     $.ui.status(`Bridge test v${VERSION} loaded · /bridge opens the pane`)
-    $.clock.every(1000, () => { if (!paused) $.ui.invalidate('ui.render') })
+    // a redraw each second fought the person's scrolling, so a scrolled pane holds still
+    $.clock.every(1000, () => { if (!paused && scrollOffset === 0) $.ui.invalidate('ui.render') })
     const r = await next(e)
     void (async () => {
       const opened = await openPane($)
@@ -399,6 +401,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e: any) => {
     const t0 = Date.now()
+    scrollOffset = Number(e.props?.scroll?.offset ?? 0)
     if (stats.last) stats.maxGap = Math.max(stats.maxGap, t0 - stats.last)
     stats.last = t0
     const { Box, Text, Button, Link, Svg, Input } = $.ui.resolve(e) as any
@@ -577,6 +580,7 @@ export const register: Register = on => {
           {row('Placement', String(p.placement ?? '?'), p.placement === 'dock' ? P.ok : P.amber)}
           {row('Width asked', `${wantCols} cols`)}
           {row('Width got', `${p.bodyColumns ?? '?'} cols`)}
+          {row('Scroll', `offset ${p.scroll?.offset ?? '?'} of ${p.scroll?.bodyRows ?? '?'} rows shown; redraw ${scrollOffset > 0 ? 'held while scrolled' : 'running'}`)}
           {row('Last open', lastOpen)}
           {row('Viewport', `${v.columns ?? '?'} × ${v.rows ?? '?'}`)}
           <Box flexDirection="row" gap={1}>
