@@ -21,3 +21,13 @@ The pane redraws once a minute and when data changes, and holds while scrolled. 
 
 ClickUp server: `clickup_filter_tasks`, `clickup_get_current_time_entry`, `clickup_get_time_entries`, `clickup_start_time_tracking`, `clickup_stop_time_tracking`.
 Microsoft 365 server: `outlook_calendar_search`, `outlook_email_search`, `read_resource`.
+
+## v0.2.0 changes
+
+- ClickUp's daily limit (2,500 calls, shared by every chat, page and agent) is handled: the pane says "ClickUp daily limit reached · resets ~HH:MM · showing saved copy from HH:MM" and keeps the last good tasks, timer and tracked time on disk (`$.store`).
+- Polling is gentle and only while the pane is open: tasks every 15 min, timer every 2 min, time entries every 10 min, Outlook every 5 min, vault and categories every 10 min. The pane redraws each minute from what it has. `↻ Refresh` (R) and `/hud-refresh` fetch everything; a timer action refreshes the timer.
+- The pane counts its own ClickUp calls per day (footer and log).
+- A permission refusal shows the exact allow rule to add, not an error dump. A missing answer never reads as "nothing due".
+- One capture control (Enter files it). Monitoring and Second brain link to the Bridge board (https://claude.ai/artifact/Xmi8Zam4rQdaYutpmBkbjT); Cortex, Team, Infrastructure, Projects, Products and Registers are pages inside it.
+- Joins use keys: ClickUp user 80462914, four-digit project codes.
+- The pane uses letters and digits only, never Space, so it can run beside the board's Space-to-expand.

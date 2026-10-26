@@ -1,8 +1,11 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.1.1'
+const VERSION = '0.2.0'
 const PANE = 'bridge'
-const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
+const BOARD = 'https://claude.ai/artifact/Xmi8Zam4rQdaYutpmBkbjT'
+const BOARD_PAGES = ['Cortex', 'Team', 'Infrastructure', 'Projects', 'Products', 'Registers']
+// ClickUp's daily limit is shared by every chat, page and agent: poll gently, keep a saved copy.
+const POLL = { tasks: 15 * 60000, timer: 2 * 60000, entries: 10 * 60000, outlook: 5 * 60000, slow: 10 * 60000 }
 const VAULT = 'C:/vault'
 const ME = '80462914'
 const DIAG = `/tmp/bridge-diag-${Date.now().toString(36)}.log`
@@ -21,8 +24,10 @@ type Task = { id: string; name: string; list: string; due: number }
 type Sync = { s: 'syncing' | 'ok' | 'fail'; msg: string }
 const D = {
   events: [] as Ev[], eventsErr: '',
-  tasks: [] as Task[], overdue: -1, overdueMore: false, tasksErr: '',
-  timer: null as null | { taskId: string; name: string; start: number }, tracked: -1, trackedBy: {} as Record<string, number>, timeErr: '',
+  tasks: [] as Task[], overdue: -1, overdueMore: false, tasksErr: '', tasksAt: 0, tasksOkAt: 0,
+  timer: null as null | { taskId: string; name: string; start: number }, timerAt: 0, tracked: -1, trackedBy: {} as Record<string, number>, trackedAt: 0, trackedOkAt: 0, timeErr: '',
+  limitUntil: 0, limitAt: 0, perm: {} as Record<string, string>,
+  cuCalls: 0, cuDay: '',
   unread: -1, mailErr: '',
   cats: {} as Record<string, { n: number; more: boolean } | null>, catsErr: '',
   stale: -1, inbox: -1, vaultErr: '',
@@ -71,13 +76,52 @@ const discover = async ($: any) => {
     if (m) (servers[m[1]!] ??= []).push(m[2]!)
   }
 }
+// A failed call is classified once, so the pane can say what to do instead of dumping an error.
+const mk = (kind: 'limit' | 'perm' | 'other', msg: string, rule = '') => Object.assign(new Error(msg), { kind, rule })
+const limitMsg = () => `ClickUp daily limit reached · resets ~${D.limitUntil ? hhmm(new Date(D.limitUntil)) : '12:00'}`
+const fr = (e: any) => (e?.kind === 'limit' ? limitMsg() : e?.kind === 'perm' ? `Needs permission · add "${e.rule}" to permissions.allow` : err(e).slice(0, 140))
+const classify = (srv: string, tool: string, text: string) => {
+  if (/RATE_LIMIT_EXCEEDED|Daily MCP limit|limit reached/i.test(text)) {
+    const secs = /"retryAfter"\s*:\s*(\d+)/.exec(text)
+    const hm_ = /Try again in (\d+)h\s*(\d+)m/i.exec(text)
+    const wait = secs ? Number(secs[1]) * 1000 : hm_ ? (Number(hm_[1]) * 60 + Number(hm_[2])) * 60000 : 6 * 3600000
+    D.limitAt = Date.now(); D.limitUntil = Date.now() + wait
+    return mk('limit', limitMsg())
+  }
+  if (/classifier/i.test(text)) { const rule = `mcp__${srv}__${tool}`; D.perm[tool] = rule; return mk('perm', `needs permission ${rule}`, rule) }
+  return mk('other', `${tool}: ${text.slice(0, 160)}`)
+}
 const call = async ($: any, tool: string, args: Record<string, unknown>) => {
   if (!Object.keys(servers).length) await discover($)
   const srv = Object.keys(servers).find(s => servers[s]!.includes(tool))
-  if (!srv) throw new Error(`no connected server exposes ${tool}`)
-  const r: any = await $.mcp.call(srv, tool, args)
-  if (r?.isError) throw new Error(`${tool}: ${textOf(r).slice(0, 200)}`)
+  if (!srv) throw mk('other', `no connected server exposes ${tool}`)
+  if (tool.startsWith('clickup_')) {
+    if (Date.now() < D.limitUntil) throw mk('limit', limitMsg())
+    const day = ymd(new Date())
+    if (D.cuDay !== day) { D.cuDay = day; D.cuCalls = 0 }
+    D.cuCalls++
+    void $.store.set('cuCalls', { day, n: D.cuCalls })
+    void note($, `ClickUp call ${D.cuCalls} today: ${tool}`)
+  }
+  const bad = (text: string) => { const ce = classify(srv, tool, text); if (ce.kind === 'limit') void $.store.set('cuLimit', D.limitUntil); return ce }
+  let r: any
+  try { r = await $.mcp.call(srv, tool, args) } catch (e) { throw bad(err(e)) }
+  if (r?.isError || /RATE_LIMIT_EXCEEDED/.test(textOf(r))) throw bad(textOf(r))
   return r
+}
+
+async function saveCache($: any) {
+  try { await $.store.set('cuCache', { tasks: D.tasks, tasksOkAt: D.tasksOkAt, overdue: D.overdue, overdueMore: D.overdueMore, tracked: D.tracked, trackedBy: D.trackedBy, trackedOkAt: D.trackedOkAt, timer: D.timer, timerAt: D.timerAt }) } catch {}
+}
+async function loadCache($: any) {
+  try {
+    const c: any = await $.store.get('cuCache')
+    if (c) Object.assign(D, { tasks: c.tasks ?? [], tasksOkAt: c.tasksOkAt ?? 0, overdue: c.overdue ?? -1, overdueMore: !!c.overdueMore, tracked: c.tracked ?? -1, trackedBy: c.trackedBy ?? {}, trackedOkAt: c.trackedOkAt ?? 0, timer: c.timer ?? null, timerAt: c.timerAt ?? 0 })
+    const lim = Number(await $.store.get('cuLimit'))
+    if (lim > Date.now()) D.limitUntil = lim
+    const n: any = await $.store.get('cuCalls')
+    if (n?.day === ymd(new Date())) { D.cuDay = n.day; D.cuCalls = Number(n.n) || 0 }
+  } catch {}
 }
 
 const touch = ($: any) => {
@@ -91,11 +135,12 @@ async function refreshCalendar($: any) {
     const r = await call($, 'outlook_calendar_search', { query: '*', afterDateTime: `${ymd(d)}T00:00:00`, beforeDateTime: `${ymd(n)}T00:00:00`, limit: 25, order: 'oldest' })
     D.events = parseBlocks(r).filter((x: any) => x.subject && !x.isAllDay && !x.isCancelled).map((x: any) => ({ subject: String(x.subject), start: hrs(new Date(String(x.start?.dateTime).slice(0, 19))), end: hrs(new Date(String(x.end?.dateTime).slice(0, 19))) }))
     D.eventsErr = ''
-  } catch (e) { D.eventsErr = err(e) }
+  } catch (e) { D.eventsErr = fr(e) }
   touch($)
 }
 
 async function refreshTasks($: any) {
+  D.tasksAt = Date.now()
   try {
     const r = await call($, 'clickup_filter_tasks', { assignees: [ME], due_date_to: ymd(new Date()), order_by: 'due_date', fields: ['due_date', 'list', 'status'] })
     const body = parseBlocks(r)[0] ?? {}
@@ -105,11 +150,14 @@ async function refreshTasks($: any) {
     D.overdue = D.tasks.filter(t => t.due < t0).length
     D.overdueMore = !!body.has_more
     D.tasksErr = ''
-  } catch (e) { D.tasksErr = err(e) }
+    D.tasksOkAt = Date.now()
+    await saveCache($)
+  } catch (e) { D.tasksErr = fr(e) }
   touch($)
 }
 
-async function refreshTimer($: any) {
+async function refreshTimerNow($: any) {
+  D.timerAt = Date.now()
   try {
     const j = parseBlocks(await call($, 'clickup_get_current_time_entry', {}))[0] ?? {}
     if (!lastRaw) { lastRaw = 'x'; void note($, `current entry raw ${JSON.stringify(j).slice(0, 600)}`) }
@@ -117,11 +165,16 @@ async function refreshTimer($: any) {
     if (j.isTracking === false || !ce) D.timer = null
     else D.timer = { taskId: String(ce.task?.id ?? ce.task_id ?? ''), name: String(ce.task?.name ?? ce.description ?? 'Task'), start: Number(ce.start ?? ce.start_time ?? Date.now()) }
     D.timeErr = ''
-  } catch (e) { D.timeErr = err(e) }
+    await saveCache($)
+  } catch (e) { D.timeErr = fr(e) }
+  touch($)
+}
+
+async function refreshEntries($: any) {
+  D.trackedAt = Date.now()
   try {
     const d = new Date(), n = new Date(d.getTime() + 864e5)
-    const j = parseBlocks(await call($, 'clickup_get_time_entries', { start_date: `${ymd(d)} 00:00`, end_date: `${ymd(n)} 00:00` }))[0] ?? {}
-    void note($, `time entries raw ${JSON.stringify(j).slice(0, 500)}`)
+    const j = parseBlocks(await call($, 'clickup_get_time_entries', { assignee: [ME], start_date: `${ymd(d)} 00:00`, end_date: `${ymd(n)} 00:00` }))[0] ?? {}
     const arr: any[] = Array.isArray(j) ? j : j.entries ?? j.data ?? j.time_entries ?? []
     D.trackedBy = {}
     let total = 0
@@ -133,9 +186,13 @@ async function refreshTimer($: any) {
       if (id) D.trackedBy[id] = (D.trackedBy[id] ?? 0) + ms
     }
     D.tracked = total
-  } catch (e) { D.timeErr = err(e) }
+    D.timeErr = ''
+    D.trackedOkAt = Date.now()
+    await saveCache($)
+  } catch (e) { D.timeErr = fr(e) }
   touch($)
 }
+const refreshTimer = async ($: any) => { await refreshTimerNow($); await refreshEntries($) }
 
 async function refreshMail($: any) {
   try {
@@ -143,7 +200,7 @@ async function refreshMail($: any) {
     const inbox = folders.find((f: any) => f.name === 'Inbox')
     D.unread = inbox ? Number(inbox.unreadCount) : -1
     D.mailErr = inbox ? '' : 'Inbox folder not found'
-  } catch (e) { D.mailErr = err(e) }
+  } catch (e) { D.mailErr = fr(e) }
   touch($)
 }
 
@@ -154,7 +211,7 @@ async function refreshCats($: any) {
       const items = parseBlocks(await call($, 'outlook_email_search', { query: `category:"[${nn}] ${name}"`, limit: 25 }))
       const msgs = items.filter((x: any) => x.subject)
       D.cats[nn] = { n: msgs.length, more: items.some((x: any) => x.moreResults) }
-    } catch (e) { D.cats[nn] = null; D.catsErr = err(e) }
+    } catch (e) { D.cats[nn] = null; D.catsErr = fr(e) }
   }
   touch($)
 }
@@ -183,18 +240,23 @@ async function refreshVault($: any) {
     D.stale = st.stale
     D.inbox = ((await $.fs.list(`${VAULT}/01-Inbox`)) as any[]).filter(e => e.kind === 'file').length
     D.vaultErr = ''
-  } catch (e) { D.vaultErr = err(e) }
+  } catch (e) { D.vaultErr = fr(e) }
   touch($)
 }
 
-let lastFast = 0, lastSlow = 0
+// Fetch only what is older than its poll interval; force (the button, /hud-refresh) fetches everything.
+let lastOutlook = 0, lastSlow = 0
 async function refreshAll($: any, force = false) {
   const now = Date.now()
-  const slow = force || now - lastSlow > 10 * 60000
-  if (!force && now - lastFast < 4 * 60000 && !slow) return
-  lastFast = now
-  await Promise.all([refreshCalendar($), refreshTasks($), refreshTimer($), refreshMail($)])
-  if (slow) { lastSlow = now; await refreshVault($); if (isOpen) await refreshCats($) }
+  const due = (at: number, every: number) => force || now - at > every
+  const jobs: Promise<void>[] = []
+  if (due(lastOutlook, POLL.outlook)) { lastOutlook = now; jobs.push(refreshCalendar($), refreshMail($)) }
+  if (due(D.tasksAt, POLL.tasks)) jobs.push(refreshTasks($))
+  if (due(D.timerAt, POLL.timer)) jobs.push(refreshTimerNow($))
+  if (due(D.trackedAt, POLL.entries)) jobs.push(refreshEntries($))
+  await Promise.all(jobs)
+  if (due(lastSlow, POLL.slow)) { lastSlow = now; await refreshVault($); if (isOpen) await refreshCats($) }
+  if (force) addLog($, `Refreshed · ClickUp calls today ${D.cuCalls}`)
 }
 
 // ---- actions ----------------------------------------------------------------
@@ -207,9 +269,10 @@ async function startTimer($: any, t: Task) {
     D.timer = { taskId: t.id, name: t.name, start: Date.now() }
     sync[t.id] = { s: 'ok', msg: '' }
     addLog($, `Timer started · ${t.name} → ClickUp ✓`)
+    void refreshTimerNow($)
     touch($)
     $.clock.after(2400, () => { delete sync[t.id]; touch($) })
-  } catch (e) { sync[t.id] = { s: 'fail', msg: err(e).slice(0, 120) }; addLog($, `Timer start failed · ${t.name} · ${err(e).slice(0, 80)}`, true); touch($) }
+  } catch (e) { sync[t.id] = { s: 'fail', msg: fr(e) }; addLog($, `Timer start failed · ${t.name} · ${fr(e)}`, true); touch($) }
 }
 async function stopTimer($: any) {
   const cur = D.timer
@@ -223,7 +286,7 @@ async function stopTimer($: any) {
     touch($)
     $.clock.after(2400, () => { delete sync[cur.taskId]; touch($) })
     void refreshTimer($)
-  } catch (e) { sync[cur.taskId] = { s: 'fail', msg: err(e).slice(0, 120) }; addLog($, `Timer stop failed · ${cur.name} · ${err(e).slice(0, 80)}`, true); touch($) }
+  } catch (e) { sync[cur.taskId] = { s: 'fail', msg: fr(e) }; addLog($, `Timer stop failed · ${cur.name} · ${fr(e)}`, true); touch($) }
 }
 async function runBrief($: any, text: string, label: string) {
   try { await $.prompt.submit({ text }); addLog($, `${label} sent to the chat`) } catch (e) { addLog($, `${label} not sent · ${err(e).slice(0, 80)}`, true) }
@@ -249,7 +312,7 @@ function stripText() {
   const nx = D.events.find(e => e.end > h)
   const parts = [
     nx ? `${nx.subject} ${hm(nx.start)} · ${nx.start > h ? `in ${hmLeft(nx.start - h)}` : 'now'}` : D.eventsErr ? 'calendar —' : 'no more meetings today',
-    D.tasks.length || !D.tasksErr ? `${D.tasks.length} open` : 'open —',
+    D.tasksOkAt ? `${D.tasks.length} open` : 'open —',
   ]
   if (D.timer) parts.push(`▶ ${mins(Date.now() - D.timer.start)}`)
   parts.push(`inbox ${D.unread >= 0 ? D.unread : '—'}`, `${D.stale >= 0 ? D.stale : '—'} stale`)
@@ -262,7 +325,7 @@ async function openPane($: any, focus = false) {
   isOpen = true
   updateStrip($)
   $.ui.invalidate('ui.render')
-  void refreshAll($, true)
+  void refreshAll($, false)
   return r
 }
 async function closePane($: any) {
@@ -329,9 +392,11 @@ export const register: Register = on => {
     if (typeof w === 'number') wantCols = w
     await $.command.register({ name: 'hud', description: 'Bridge: open or collapse the pane' })
     await $.command.register({ name: 'hud-refresh', description: 'Bridge: refresh all data now' })
+    await loadCache($)
     updateStrip($)
     // once a minute, held while the person scrolls; data changes redraw on their own
-    $.clock.every(60000, () => { if (scrollOffset === 0) $.ui.invalidate('ui.render'); updateStrip($); void refreshAll($) })
+    // redraw from what is cached; fetch only while the pane is open and a source is past its interval
+    $.clock.every(60000, () => { if (scrollOffset === 0) $.ui.invalidate('ui.render'); updateStrip($); if (isOpen) void refreshAll($) })
     const r = await next(e)
     void (async () => { try { await openPane($) } catch (x) { await note($, `open failed ${err(x)}`) } })()
     return r
@@ -380,6 +445,7 @@ export const register: Register = on => {
           {hk('m', '▶ Morning', () => { void runBrief($, 'morning', 'Morning brief') }, 'primary')}
           {hk('e', 'Evening', () => { void runBrief($, 'evening', 'Evening close') })}
           {hk('w', 'Week', () => { void runBrief($, 'weekly review', 'Week review') })}
+          {hk('r', '↻ Refresh', () => { void refreshAll($, true) })}
           <Link href={BOARD} label="Board ↗" />
           {hk('c', '⟩ Collapse', () => { void closePane($) })}
         </Box>
@@ -425,7 +491,7 @@ export const register: Register = on => {
           {Svg ? <Svg source={clockGlyph()} alt="Close needs approval" width={18} height={18} /> : null}
           <Box flexDirection="column" flexGrow={1} flexShrink={1}>
             <Text color={P.ink} size="body">{t.name}</Text>
-            <Text color={due === 'overdue' ? P.amber : P.muted} size="caption">{t.list} · {due}</Text>
+            <Text color={due === 'overdue' ? P.amber : P.muted} size="caption">{t.list}{/\b(\d{4})\b/.exec(`${t.list} ${t.name}`) ? ` · ${/\b(\d{4})\b/.exec(`${t.list} ${t.name}`)![1]}` : ''} · {due}</Text>
           </Box>
           {sy ? (
             sy.s === 'fail' ? (
@@ -443,14 +509,15 @@ export const register: Register = on => {
       )
     })
     const focus = panel('focus', 'FOCUS · CLICKUP', (
-      <Text color={P.muted} size="caption" tabular>{D.tasksErr ? 'NO DATA' : `${D.tasks.length} due or overdue${D.tracked >= 0 ? ` · tracked ${mins(D.tracked + (D.timer ? now.getTime() - D.timer.start : 0))}` : ''}`}</Text>
+      <Text color={P.muted} size="caption" tabular>{!D.tasksOkAt ? 'NO DATA' : `${D.tasks.length} due or overdue${D.tracked >= 0 ? ` · tracked ${mins(D.tracked + (D.timer ? now.getTime() - D.timer.start : 0))}` : ''}${D.tasksErr ? ' · saved' : ''}`}</Text>
     ), (
       <Box flexDirection="column" gap={1}>
-        {D.tasksErr ? <Text color={P.amber} size="footnote">ClickUp: {D.tasksErr.slice(0, 160)}</Text> : null}
-        {!D.tasksErr && !D.tasks.length ? <Text color={P.muted} size="footnote">Nothing due or overdue.</Text> : null}
+        {D.tasksErr ? <Text color={P.amber} size="footnote">{D.tasksErr} · {D.tasksOkAt ? `showing saved copy from ${hhmm(new Date(D.tasksOkAt))}` : 'nothing saved yet'}</Text> : null}
+        {!D.tasksErr && !D.tasksOkAt ? <Text color={P.muted} size="footnote">Loading ClickUp…</Text> : null}
+        {!D.tasksErr && D.tasksOkAt && !D.tasks.length ? <Text color={P.muted} size="footnote">Nothing due or overdue (checked {hhmm(new Date(D.tasksOkAt))}).</Text> : null}
         {rows}
         {D.tasks.length > 7 ? <Text color={P.muted} size="caption">+ {D.tasks.length - 7} more</Text> : null}
-        {D.timeErr ? <Text color={P.amber} size="caption">Timers: {D.timeErr.slice(0, 140)}</Text> : null}
+        {D.timeErr ? <Text color={P.amber} size="caption">Timers: {D.timeErr}</Text> : null}
       </Box>
     ))
 
@@ -511,23 +578,34 @@ export const register: Register = on => {
             <Text color={P.muted} size="caption" weight="bold">{/Grafana/.test(a) ? 'NOT WIRED' : '—'}</Text>
           </Box>
         ))}
-        <Text color={P.muted} size="caption">Cards and dashboard links arrive in phase 2.</Text>
+        <Text color={P.muted} size="caption">Pages inside the board: {BOARD_PAGES.join(' · ')}</Text>
+        <Link href={BOARD} label="Open the Bridge board ↗" />
       </Box>
-    ) : <Text color={P.ink} size="footnote">{AREAS.length} areas · no figures wired yet · Fleet NOT WIRED</Text>)
+    ) : (
+      <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
+        <Text color={P.ink} size="footnote">{AREAS.length} areas · no figures wired yet · Fleet NOT WIRED</Text>
+        <Link href={BOARD} label="Bridge board ↗" />
+      </Box>
+    ))
     const brain = panel('brain', 'SECOND BRAIN', (
       <Button key="k-7" label={open.brain ? '‹ 7 Collapse' : '› 7 Expand'} hotkey="7" onPress={() => { open.brain = !open.brain; $.ui.invalidate('ui.render') }} />
     ), open.brain ? (
       <Box flexDirection="column" gap={1}>
         <Text color={P.ink} size="footnote">Stale notes {dash(D.stale)} · 01-Inbox files {dash(D.inbox)}</Text>
-        <Text color={P.muted} size="caption">Search, recent notes and the orbit page arrive in phase 2.</Text>
+        <Text color={P.muted} size="caption">Search and recent notes arrive in phase 2. The vault lives in Cortex on the board.</Text>
+        <Link href={BOARD} label="Cortex on the Bridge board ↗" />
       </Box>
-    ) : <Text color={P.ink} size="footnote">stale {dash(D.stale)} · inbox {dash(D.inbox)}</Text>)
+    ) : (
+      <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
+        <Text color={P.ink} size="footnote">stale {dash(D.stale)} · inbox {dash(D.inbox)}</Text>
+        <Link href={BOARD} label="Cortex ↗" />
+      </Box>
+    ))
 
     // ---- capture
     const cap = panel('cap', 'CAPTURE → 01-INBOX', capNote ? <Text color={capNote.startsWith('Failed') ? P.amber : P.ok} size="caption">{capNote}</Text> : <Text color={P.muted} size="caption"> </Text>, (
       <Box flexDirection="row" gap={1} alignItems="center">
-        {Input ? <Input key="cap" placeholder="Capture → 01-Inbox" value={capture} onInput={(t: string) => { capture = t }} onSubmit={() => { void fileCapture($) }} submitLabel="file" /> : null}
-        {hk('n', 'File', () => { void fileCapture($) }, 'primary')}
+        {Input ? <Input key="cap" placeholder="Capture → 01-Inbox" value={capture} onInput={(t: string) => { capture = t }} onSubmit={() => { void fileCapture($) }} submitLabel="File" /> : null}
       </Box>
     ))
 
@@ -535,8 +613,10 @@ export const register: Register = on => {
     const foot = (
       <Box key="foot" flexDirection="column" gap={0}>
         {last ? <Text color={last.warn ? P.amber : P.muted} size="caption">{last.t} · {last.m}</Text> : null}
+        <Text color={P.muted} size="caption">ClickUp calls today from this pane: {D.cuCalls} · tasks {D.tasksOkAt ? hhmm(new Date(D.tasksOkAt)) : '—'} · timers {D.trackedOkAt ? hhmm(new Date(D.trackedOkAt)) : '—'} · refresh polls every 15 min (R forces)</Text>
+        {D.perm['clickup_get_time_entries'] ? <Text color={P.amber} size="caption">Add to permissions.allow: {D.perm['clickup_get_time_entries']}</Text> : null}
         <Box flexDirection="row" gap={1} alignItems="center">
-          <Text color={P.muted} size="caption">M morning · E evening · W week · C collapse · 4 comms · 6 monitoring · 7 brain · N file ·</Text>
+          <Text color={P.muted} size="caption">M morning · E evening · W week · R refresh · C collapse · 4 comms · 6 monitoring · 7 brain ·</Text>
           {hk('t', P === DAY ? 'Theme: daylight' : 'Theme: dark', () => { P = P === DAY ? DARK : DAY; ringCache.key = ''; void $.store.set('theme', P === DAY ? 'light' : 'dark') })}
         </Box>
       </Box>
@@ -564,7 +644,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Text color={P.accent} weight="semibold">BRIDGE</Text>
-        <Text color={P.muted}>{D.tasks.length} open{D.timer ? ` · ▶ ${mins(Date.now() - D.timer.start)}` : ''} · inbox {D.unread >= 0 ? D.unread : '—'}</Text>
+        <Text color={P.muted}>{D.tasksOkAt ? D.tasks.length : '—'} open{D.timer ? ` · ▶ ${mins(Date.now() - D.timer.start)}` : ''} · inbox {D.unread >= 0 ? D.unread : '—'}</Text>
         <Button key="band-morning" label="▶ Morning brief" variant="primary" onPress={() => { void runBrief($, 'morning', 'Morning brief') }} />
         <Button key="band-open" label="⟨ Pane" hotkey="c" onPress={() => { void openPane($) }} />
       </Box>
