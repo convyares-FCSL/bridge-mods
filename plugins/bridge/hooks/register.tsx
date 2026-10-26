@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.3.0'
+const VERSION = '0.3.1'
 const PANE = 'bridge'
 const BOARD = 'https://claude.ai/artifact/Xmi8Zam4rQdaYutpmBkbjT'
 const BOARD_PAGES = ['Cortex', 'Team', 'Infrastructure', 'Projects', 'Products', 'Registers']
@@ -430,7 +430,7 @@ function dayClockSvg(S: number, now: Date) {
   const nx = D.events.find(ev => ev.end > hrNow)
   const later = D.events.filter(ev => ev.end > hrNow && ev !== nx)[0]
   const lab = nx ? (nx.start > hrNow ? hmLeft(nx.start - hrNow) : 'now') : '—'
-  s += `<text x="${c}" y="${c - 24}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">${nx ? `T-MINUS · ${esc(nx.subject.slice(0, 26))} ${hm(nx.start)}` : 'NO MORE MEETINGS TODAY'}</text><text x="${c}" y="${c + 10}" text-anchor="middle" ${font} font-size="30" font-weight="700" fill="${P.ink}" filter="url(#gl)">${lab}</text>${later ? `<text x="${c}" y="${c + 34}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">then · ${esc(later.subject.slice(0, 28))} ${hm(later.start)}</text>` : ''}</svg>`
+  s += `<text x="${c}" y="${c - 24}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">${nx ? `T-MINUS · ${esc(nx.subject.slice(0, 16))} ${hm(nx.start)}` : 'NO MORE MEETINGS TODAY'}</text><text x="${c}" y="${c + 10}" text-anchor="middle" ${font} font-size="30" font-weight="700" fill="${P.ink}" filter="url(#gl)">${lab}</text>${later ? `<text x="${c}" y="${c + 34}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">then · ${esc(later.subject.slice(0, 20))} ${hm(later.start)}</text>` : ''}</svg>`
   return s
 }
 
@@ -678,7 +678,9 @@ export const register: Register = on => {
     ))
 
     // ---- monitoring: folded row on the narrow layout, a card strip on the others
-    const cardPx = layout === 'wide' ? 300 : 240
+    // the strips share one row: the active card takes what is left after seven 34 px strips
+    const panelPx = Math.floor((layout === 'wide' ? (bc - 4) * 0.4 : (bc - 4) * 0.5) * 7.5) - 40
+    const cardPx = Math.max(170, Math.min(300, panelPx - 7 * 34))
     const strip = (() => {
       const ac = CARDS[monActive]!
       const art = (c: typeof ac, i: number, w: number, hgt: number) => (Svg ? <Svg source={artSvg(c.art, w, hgt, i + 1, c.wired ? P.accent : P.muted, c.wired ? 1 : 0.55)} alt={`${c.name} art`} width={w} height={hgt} /> : null)
@@ -697,7 +699,7 @@ export const register: Register = on => {
               <Text color={P.muted} size="footnote" tabular>Figures —</Text>
               {ac.wired ? <Link href={BOARD} label="Open on the board ↗" /> : <Text color={P.muted} size="caption">Dimmed until a source is connected.</Text>}
             </Box>
-            <Box flexDirection="row" gap={1} flexGrow={1} flexWrap="wrap">
+            <Box flexDirection="row" gap={1} flexGrow={1}>
               {others.map(({ c, i }) => Svg ? <Svg key={c.name} source={vtitleSvg(c.name, c.wired ? P.ink : P.muted, c.wired ? 1 : 0.55)} alt={c.name} width={30} height={140} /> : null)}
             </Box>
           </Box>
@@ -748,7 +750,7 @@ export const register: Register = on => {
       : panel('brain', 'SECOND BRAIN', <Link href={BOARD} label="Open second brain ↗" />, (
         <Box flexDirection="column" gap={1}>
           <Text color={P.ink} size="footnote" tabular>Stale notes {dash(D.stale)} · 01-Inbox files {dash(D.inbox)} · {vaultIndex.length} notes indexed</Text>
-          {Input ? <Input key="brain-q" placeholder="Search note names ( / not a hotkey )" value={brainQuery} onInput={(t: string) => { brainQuery = t; $.ui.invalidate('ui.render') }} onSubmit={() => {}} submitLabel="Search" /> : null}
+          {Input ? <Input key="brain-q" placeholder="Search notes" value={brainQuery} onInput={(t: string) => { brainQuery = t; $.ui.invalidate('ui.render') }} onSubmit={() => {}} submitLabel="Search" /> : null}
           <Text color={P.muted} size="caption">{q ? `${found.length} match${found.length === 1 ? '' : 'es'}` : 'RECENT NOTES'}</Text>
           {found.map(n => (
             <Box key={n.rel} flexDirection="column" gap={0}>
