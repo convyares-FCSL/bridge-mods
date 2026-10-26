@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.1.0'
+const VERSION = '0.1.1'
 const PANE = 'bridge'
 const BOARD = 'https://claude.ai/artifact/GN2tcQ42UgaNPiYshjgd26'
 const VAULT = 'C:/vault'
@@ -352,9 +352,9 @@ export const register: Register = on => {
     scrollOffset = Number(e.props?.scroll?.offset ?? 0)
     const { Box, Text, Button, Link, Svg, Input } = $.ui.resolve(e) as any
     const now = new Date()
-    const h = hrs(now)
-    const nx = D.events.find(ev => ev.end > h)
-    const later = D.events.filter(ev => ev.end > h && ev !== nx)[0]
+    const hr = hrs(now)
+    const nx = D.events.find(ev => ev.end > hr)
+    const later = D.events.filter(ev => ev.end > hr && ev !== nx)[0]
     const bandOf = (n: number, calm: number, amber: number) => (n < 0 ? P.muted : n <= calm ? P.ok : n <= amber ? P.amber : P.red)
     const bandWord = (n: number, calm: number, amber: number) => (n < 0 ? 'NO DATA' : n <= calm ? 'CALM' : n <= amber ? 'AMBER' : 'RED')
     const hk = (k: string, label: string, fn: () => void, variant?: string) => <Button key={`k-${k}`} label={label} hotkey={k} {...(variant ? { variant } : {})} onPress={() => { fn(); $.ui.invalidate('ui.render') }} />
@@ -405,7 +405,7 @@ export const register: Register = on => {
           <Box flexDirection="column" flexGrow={1} gap={0}>
             <Text color={P.muted} size="caption" weight="semibold">{nx ? `NEXT · ${hm(nx.start)}` : D.eventsErr ? 'NEXT · NO DATA' : 'NEXT'}</Text>
             <Text color={P.ink} size="heading" weight="semibold">{nx ? nx.subject : D.eventsErr ? '—' : 'Nothing more today'}</Text>
-            <Text color={P.muted} size="footnote">{nx ? (nx.start > h ? `in ${hmLeft(nx.start - h)}` : 'now') : ' '}</Text>
+            <Text color={P.muted} size="footnote">{nx ? (nx.start > hr ? `in ${hmLeft(nx.start - hr)}` : 'now') : ' '}</Text>
             <Text color={P.muted} size="footnote">{later ? `then · ${later.subject} ${hm(later.start)}` : ' '}</Text>
           </Box>
         </Box>
