@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const VERSION = '0.2.0'
+const VERSION = '0.3.0'
 const PANE = 'bridge'
 const BOARD = 'https://claude.ai/artifact/Xmi8Zam4rQdaYutpmBkbjT'
 const BOARD_PAGES = ['Cortex', 'Team', 'Infrastructure', 'Projects', 'Products', 'Registers']
@@ -216,7 +216,7 @@ async function refreshCats($: any) {
   touch($)
 }
 
-async function scanVault($: any, dir: string, st: { files: number; stale: number }) {
+async function scanVault($: any, dir: string, st: { files: number; stale: number; idx: { rel: string; name: string; mtime: number }[] }) {
   let ents: any[] = []
   try { ents = await $.fs.list(dir) } catch { return }
   for (const en of ents) {
@@ -224,6 +224,7 @@ async function scanVault($: any, dir: string, st: { files: number; stale: number
     if (en.kind === 'dir') { if (!/^(\.|_attachments$|Claude outputs$)/.test(en.name)) await scanVault($, `${dir}/${en.name}`, st); continue }
     if (!en.name.endsWith('.md')) continue
     st.files++
+    st.idx.push({ rel: dir.replace(VAULT + "/", "").replace(VAULT, ""), name: en.name, mtime: Number(en.mtimeMs ?? 0) })
     try {
       const head = String(await $.fs.read(`${dir}/${en.name}`)).split(/\r?\n/).slice(0, 40)
       if (head[0]?.trim() === '---') {
@@ -235,9 +236,10 @@ async function scanVault($: any, dir: string, st: { files: number; stale: number
 }
 async function refreshVault($: any) {
   try {
-    const st = { files: 0, stale: 0 }
+    const st = { files: 0, stale: 0, idx: [] as { rel: string; name: string; mtime: number }[] }
     await scanVault($, VAULT, st)
     D.stale = st.stale
+    vaultIndex = st.idx
     D.inbox = ((await $.fs.list(`${VAULT}/01-Inbox`)) as any[]).filter(e => e.kind === 'file').length
     D.vaultErr = ''
   } catch (e) { D.vaultErr = fr(e) }
@@ -378,6 +380,91 @@ function gaugeSvg(n: number, max: number, band: string) {
 }
 const clockGlyph = () => `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="2" fill="none" stroke="${P.amber}"/><circle cx="9" cy="9" r="4.5" fill="none" stroke="${P.amber}"/><path d="M9 6.5V9l2 1.2" fill="none" stroke="${P.amber}"/></svg>`
 
+// ---- phase 2 drawings: timeline, day clock, monitoring art, vertical titles ----
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function timelineSvg(W: number, now: Date) {
+  const x = (hh: number) => 8 + ((hh - 6) / 14) * (W - 16)
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="56" viewBox="0 0 ${W} 56"><rect width="${W}" height="56" fill="${P.panel}"/><line x1="8" y1="38" x2="${W - 8}" y2="38" stroke="${P.line}"/>`
+  for (let hh = 6; hh <= 20; hh++) {
+    const X = x(hh)
+    s += `<line x1="${X.toFixed(1)}" y1="38" x2="${X.toFixed(1)}" y2="${hh % 2 ? 41 : 44}" stroke="${P.line}"/>`
+    if (hh % 2 === 0) s += `<text x="${X.toFixed(1)}" y="54" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="10" fill="${P.muted}">${f2(hh)}</text>`
+  }
+  for (const ev of D.events) {
+    const X = x(Math.max(6, ev.start)), w = Math.max(3, x(Math.min(20, ev.end)) - X)
+    s += `<rect x="${X.toFixed(1)}" y="10" width="${w.toFixed(1)}" height="20" fill="${P.accent}"><title>${esc(ev.subject)} ${hm(ev.start)}</title></rect>`
+    if (w > ev.subject.length * 6.6 + 12) s += `<text x="${(X + 6).toFixed(1)}" y="24" font-family="Segoe UI, system-ui, sans-serif" font-size="10" fill="${P === DAY ? '#ffffff' : '#061018'}">${esc(ev.subject)}</text>`
+  }
+  const hh = Math.min(20, Math.max(6, hrs(now)))
+  const x0 = x(hh), x1 = x(20)
+  s += `<g transform="translate(${x0.toFixed(1)} 0)"><line x1="0" y1="2" x2="0" y2="48" stroke="${P.accent}" stroke-width="1.5"/><path d="M-5 2h10l-5 6z" fill="${P.accent}"/><text x="7" y="10" font-family="Segoe UI, system-ui, sans-serif" font-size="10" fill="${P.accent}">${hhmm(now)}</text><animateTransform attributeName="transform" type="translate" from="${x0.toFixed(1)} 0" to="${x1.toFixed(1)} 0" dur="${Math.max(60, Math.round((20 - hh) * 3600))}s" fill="freeze"/></g></svg>`
+  return s
+}
+
+function dayClockSvg(S: number, now: Date) {
+  const c = 200, R = 186
+  const ang = (hh: number) => ((hh - 12) / 24) * 2 * Math.PI - Math.PI / 2
+  const pt = (hh: number, r: number): [number, number] => [c + r * Math.cos(ang(hh)), c + r * Math.sin(ang(hh))]
+  const arc = (a: number, b: number, r: number, w: number, col: string, op: number) => {
+    const [x1, y1] = pt(a, r), [x2, y2] = pt(b, r)
+    return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)}A${r} ${r} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${w}" opacity="${op}"/>`
+  }
+  const font = 'font-family="Segoe UI, system-ui, sans-serif"'
+  const hrNow = hrs(now), sec = now.getSeconds()
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 400 400"><defs><radialGradient id="wg" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="${P.accent}" stop-opacity="0"/><stop offset="1" stop-color="${P.accent}" stop-opacity=".16"/></radialGradient><filter id="gl"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="400" height="400" fill="${P.panel}"/>`
+  s += `<circle cx="${c}" cy="${c}" r="${R}" fill="none" stroke="${P.line}"/>`
+  for (let i = 0; i < 24; i++) {
+    const [x1, y1] = pt(i, R), [x2, y2] = pt(i, R - (i % 6 ? 6 : 12))
+    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${P.muted}" stroke-width="${i % 6 ? 1 : 1.5}"/>`
+    if (i % 3 === 0) { const [tx, ty] = pt(i, R - 24); s += `<text x="${tx.toFixed(1)}" y="${(ty + 4).toFixed(1)}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">${f2(i)}</text>` }
+  }
+  s += arc(6, 20, R - 40, 1, P.line, 1)
+  for (const ev of D.events) s += arc(ev.start, Math.max(ev.end, ev.start + 0.1), R - 40, 10, P.accent, 1)
+  const deg = ((hrNow - 12) / 24) * 360
+  const rs = R - 76, sc = 2 * Math.PI * rs
+  s += `<circle cx="${c}" cy="${c}" r="${rs}" fill="none" stroke="${P.line}" stroke-width="3"/><circle cx="${c}" cy="${c}" r="${rs}" fill="none" stroke="${P.accent}" stroke-width="3" stroke-dasharray="${sc.toFixed(1)}" transform="rotate(-90 ${c} ${c})"><animate attributeName="stroke-dashoffset" from="${(sc * (1 - sec / 60)).toFixed(1)}" to="0" dur="${60 - sec}s" fill="freeze"/></circle>`
+  const RW = R - 2, sA = -Math.PI / 2 - (2 * Math.PI) / 24
+  s += `<g transform="rotate(${deg.toFixed(2)} ${c} ${c})"><path d="M${c} ${c}L${(c + RW * Math.cos(sA)).toFixed(1)} ${(c + RW * Math.sin(sA)).toFixed(1)}A${RW} ${RW} 0 0 1 ${c} ${c - RW}z" fill="url(#wg)"/><line x1="${c}" y1="${c - 92}" x2="${c}" y2="${c - R + 2}" stroke="${P.accent}" stroke-width="1.5" filter="url(#gl)"/><circle cx="${c}" cy="${c - R + 2}" r="3.5" fill="${P.accent}"/><animateTransform attributeName="transform" type="rotate" from="${deg.toFixed(2)} ${c} ${c}" to="${(deg + 360).toFixed(2)} ${c} ${c}" dur="86400s" repeatCount="indefinite"/></g>`
+  const nx = D.events.find(ev => ev.end > hrNow)
+  const later = D.events.filter(ev => ev.end > hrNow && ev !== nx)[0]
+  const lab = nx ? (nx.start > hrNow ? hmLeft(nx.start - hrNow) : 'now') : '—'
+  s += `<text x="${c}" y="${c - 24}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">${nx ? `T-MINUS · ${esc(nx.subject.slice(0, 26))} ${hm(nx.start)}` : 'NO MORE MEETINGS TODAY'}</text><text x="${c}" y="${c + 10}" text-anchor="middle" ${font} font-size="30" font-weight="700" fill="${P.ink}" filter="url(#gl)">${lab}</text>${later ? `<text x="${c}" y="${c + 34}" text-anchor="middle" ${font} font-size="11" fill="${P.muted}">then · ${esc(later.subject.slice(0, 28))} ${hm(later.start)}</text>` : ''}</svg>`
+  return s
+}
+
+// deterministic card art in one colour; no figure is drawn from data
+function artSvg(kind: string, w: number, hgt: number, seed: number, col: string, op: number) {
+  let x = seed * 9301 + 49297
+  const rnd = () => { x = (x * 9301 + 49297) % 233280; return x / 233280 }
+  let o = ''
+  if (kind === 'wave') for (let k = 0; k < 3; k++) { let d = `M0 ${hgt * 0.55 + k * 8}`; for (let xx = 0; xx <= w; xx += 8) d += ` L${xx} ${(hgt * 0.55 + k * 8 + Math.sin(xx / 30 + k * 1.3) * (10 - k * 2)).toFixed(1)}`; o += `<path d="${d}" fill="none" stroke="${col}" stroke-opacity="${(0.75 - k * 0.2) * op}" stroke-width="${1.6 - k * 0.3}"/>` }
+  else if (kind === 'rings') for (let k = 0; k < 4; k++) o += `<circle cx="${w / 2}" cy="${hgt / 2}" r="${10 + k * 11}" fill="none" stroke="${col}" stroke-opacity="${(0.55 - k * 0.1) * op}" stroke-width="${k % 2 ? 4 : 1.5}" stroke-dasharray="${(rnd() * 90 + 20).toFixed(0)} ${(rnd() * 40 + 10).toFixed(0)}"/>`
+  else if (kind === 'nodes') { const pts: [number, number][] = []; for (let i = 0; i < 14; i++) pts.push([10 + rnd() * (w - 20), 6 + rnd() * (hgt - 12)]); pts.forEach((p, i) => pts.forEach((q, j) => { if (j > i && Math.hypot(p[0] - q[0], p[1] - q[1]) < 46) o += `<line x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}" stroke="${col}" stroke-opacity="${0.4 * op}"/>` })); pts.forEach(p => { o += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${col}" fill-opacity="${0.85 * op}"/>` }) }
+  else for (let i = 0; i < Math.floor(w / 9); i++) { const bh = 8 + rnd() * (hgt - 14); o += `<rect x="${4 + i * 9}" y="${(hgt - bh).toFixed(1)}" width="5" height="${bh.toFixed(1)}" fill="${col}" fill-opacity="${(0.15 + rnd() * 0.5) * op}"/>` }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${hgt}" viewBox="0 0 ${w} ${hgt}"><rect width="${w}" height="${hgt}" fill="${P.panel}"/>${o}</svg>`
+}
+
+// native Text cannot rotate, so a narrow card's title is drawn as SVG text
+function vtitleSvg(text: string, col: string, op: number) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="140" viewBox="0 0 30 140"><rect width="30" height="140" fill="${P.panel}"/><text transform="translate(19 134) rotate(-90)" font-family="Segoe UI, system-ui, sans-serif" font-size="12" fill="${col}" opacity="${op}">${esc(text.length > 20 ? text.slice(0, 19) + '…' : text)}</text></svg>`
+}
+
+const CARDS: { name: string; line: string; legacy: boolean; wired: boolean; art: string }[] = [
+  { name: 'Engineering overview', line: 'The old Engineering board, still in the legacy style.', legacy: true, wired: true, art: 'bars' },
+  { name: 'ECR tracker', line: 'Engineering change requests, in the legacy view.', legacy: true, wired: true, art: 'nodes' },
+  { name: 'Toyota CEP development (1792)', line: 'Project 1792 on the board.', legacy: false, wired: true, art: 'rings' },
+  { name: 'Engineering workload', line: 'Team workload on the board.', legacy: false, wired: true, art: 'wave' },
+  { name: 'AI Rollout', line: 'AI rollout tracker on the board.', legacy: false, wired: true, art: 'nodes' },
+  { name: 'HyQube supply plan 2027', line: 'Supply plan on the board.', legacy: false, wired: true, art: 'bars' },
+  { name: 'FCSL Systems', line: 'Systems register on the board.', legacy: false, wired: true, art: 'rings' },
+  { name: 'Fleet (Grafana)', line: 'No source connected yet.', legacy: false, wired: false, art: 'wave' },
+]
+let monActive = 0
+let brainQuery = ''
+let vaultIndex: { rel: string; name: string; mtime: number }[] = []
+
 // ---- module -----------------------------------------------------------------
 
 export const register: Register = on => {
@@ -418,6 +505,9 @@ export const register: Register = on => {
     const { Box, Text, Button, Link, Svg, Input } = $.ui.resolve(e) as any
     const now = new Date()
     const hr = hrs(now)
+    const bc = Number(e.props?.bodyColumns ?? 60)
+    // three layouts by pane width in columns; each drawing changes size only at a breakpoint
+    const layout: 'narrow' | 'medium' | 'wide' = bc > 150 ? 'wide' : bc >= 90 ? 'medium' : 'narrow'
     const nx = D.events.find(ev => ev.end > hr)
     const later = D.events.filter(ev => ev.end > hr && ev !== nx)[0]
     const bandOf = (n: number, calm: number, amber: number) => (n < 0 ? P.muted : n <= calm ? P.ok : n <= amber ? P.amber : P.red)
@@ -433,6 +523,7 @@ export const register: Register = on => {
       </Box>
     )
     const dash = (v: number) => (v < 0 ? '—' : String(v))
+    const toggle = (k: string, key: 'comms' | 'monitoring' | 'brain') => <Button key={`k-${k}`} label={open[key] ? `‹ ${k} Collapse` : `› ${k} Expand`} hotkey={k} onPress={() => { open[key] = !open[key]; $.ui.invalidate('ui.render') }} />
 
     // ---- masthead
     const masthead = (
@@ -440,6 +531,7 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={1} alignItems="center">
           <Text color={P.accent} size="caption" weight="bold">BRIDGE</Text>
           <Text color={P.ink} size="footnote" tabular>{hhmm(now)}</Text>
+          {layout !== 'narrow' ? <Text color={P.muted} size="footnote">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()]} {now.getDate()} {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][now.getMonth()]}</Text> : null}
         </Box>
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           {hk('m', '▶ Morning', () => { void runBrief($, 'morning', 'Morning brief') }, 'primary')}
@@ -452,7 +544,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    // ---- next meeting, with the timer folded in
+    // ---- timer
     const timerRow = D.timer ? (
       <Box key="timer" flexDirection="row" gap={1} alignItems="center" borderStyle="single" borderColor={P.accent} backgroundColor={P.asoft} padding={1}>
         {Svg ? <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="${P.accent}"><animate attributeName="opacity" values="1;.25;1" dur="1.2s" repeatCount="indefinite"/></circle></svg>`} alt="Timer running" isInteractive width={8} height={8} /> : null}
@@ -464,34 +556,52 @@ export const register: Register = on => {
         <Button key="stop" label="■ Stop" onPress={() => { void stopTimer($) }} />
       </Box>
     ) : null
+
+    // ---- next meeting (ring) or, on the wide layout, the day clock
+    const nextInfo = (
+      <Box flexDirection="column" flexGrow={1} gap={0}>
+        <Text color={P.muted} size="caption" weight="semibold">{nx ? `NEXT · ${hm(nx.start)}` : D.eventsErr ? 'NEXT · NO DATA' : 'NEXT'}</Text>
+        <Text color={P.ink} size="heading" weight="semibold">{nx ? nx.subject : D.eventsErr ? '—' : 'Nothing more today'}</Text>
+        <Text color={P.muted} size="footnote">{nx ? (nx.start > hr ? `in ${hmLeft(nx.start - hr)}` : 'now') : ' '}</Text>
+        <Text color={P.muted} size="footnote">{later ? `then · ${later.subject} ${hm(later.start)}` : ' '}</Text>
+      </Box>
+    )
     const next_ = (
       <Box key="next" flexDirection="column" borderStyle="single" borderColor={P.line} backgroundColor={P.panel} padding={1} gap={1}>
         <Box flexDirection="row" gap={2} alignItems="center">
           {Svg ? <Svg source={ringFor(now)} alt="Day ring with the countdown to the next meeting" isInteractive width={96} height={96} /> : null}
-          <Box flexDirection="column" flexGrow={1} gap={0}>
-            <Text color={P.muted} size="caption" weight="semibold">{nx ? `NEXT · ${hm(nx.start)}` : D.eventsErr ? 'NEXT · NO DATA' : 'NEXT'}</Text>
-            <Text color={P.ink} size="heading" weight="semibold">{nx ? nx.subject : D.eventsErr ? '—' : 'Nothing more today'}</Text>
-            <Text color={P.muted} size="footnote">{nx ? (nx.start > hr ? `in ${hmLeft(nx.start - hr)}` : 'now') : ' '}</Text>
-            <Text color={P.muted} size="footnote">{later ? `then · ${later.subject} ${hm(later.start)}` : ' '}</Text>
-          </Box>
+          {nextInfo}
         </Box>
         {D.eventsErr ? <Text color={P.amber} size="caption">Calendar: {D.eventsErr.slice(0, 140)}</Text> : null}
-        {timerRow}
+        {layout === 'narrow' ? timerRow : null}
       </Box>
     )
+    const clockPx = 340
+    const clock_ = panel('clock', 'DAY CLOCK', <Text color={P.muted} size="caption">{D.events.length} meetings today</Text>, (
+      <Box flexDirection="column" alignItems="center" gap={1}>
+        {Svg ? <Svg source={dayClockSvg(clockPx, now)} alt="Day clock with today's meetings and the countdown" isInteractive width={clockPx} height={clockPx} /> : null}
+        {D.eventsErr ? <Text color={P.amber} size="caption">Calendar: {D.eventsErr.slice(0, 140)}</Text> : null}
+      </Box>
+    ))
+    const tlW = Math.max(600, Math.floor((bc * 7.5 - 40) / 100) * 100)
+    const timeline = panel('timeline', 'TIMELINE · 06:00–20:00', <Text color={P.muted} size="caption">{D.events.length} on the calendar</Text>, (
+      Svg ? <Svg source={timelineSvg(tlW, now)} alt="Day timeline with today's meetings and a now marker" isInteractive width={tlW} height={56} /> : null
+    ))
 
     // ---- focus
-    const rows = D.tasks.slice(0, 7).map(t => {
+    const maxRows = layout === 'wide' ? 10 : layout === 'medium' ? 8 : 7
+    const rows = D.tasks.slice(0, maxRows).map(t => {
       const sy = sync[t.id]
       const running = D.timer?.taskId === t.id
       const el = (D.trackedBy[t.id] ?? 0) + (running ? now.getTime() - D.timer!.start : 0)
       const due = t.due < dayStart() ? 'overdue' : 'today'
+      const code = /\b(\d{4})\b/.exec(`${t.list} ${t.name}`)
       return (
         <Box key={t.id} flexDirection="row" gap={1} alignItems="center" {...(running ? { backgroundColor: P.asoft } : {})}>
           {Svg ? <Svg source={clockGlyph()} alt="Close needs approval" width={18} height={18} /> : null}
           <Box flexDirection="column" flexGrow={1} flexShrink={1}>
             <Text color={P.ink} size="body">{t.name}</Text>
-            <Text color={due === 'overdue' ? P.amber : P.muted} size="caption">{t.list}{/\b(\d{4})\b/.exec(`${t.list} ${t.name}`) ? ` · ${/\b(\d{4})\b/.exec(`${t.list} ${t.name}`)![1]}` : ''} · {due}</Text>
+            <Text color={due === 'overdue' ? P.amber : P.muted} size="caption">{t.list}{code ? ` · ${code[1]}` : ''} · {due}</Text>
           </Box>
           {sy ? (
             sy.s === 'fail' ? (
@@ -516,12 +626,12 @@ export const register: Register = on => {
         {!D.tasksErr && !D.tasksOkAt ? <Text color={P.muted} size="footnote">Loading ClickUp…</Text> : null}
         {!D.tasksErr && D.tasksOkAt && !D.tasks.length ? <Text color={P.muted} size="footnote">Nothing due or overdue (checked {hhmm(new Date(D.tasksOkAt))}).</Text> : null}
         {rows}
-        {D.tasks.length > 7 ? <Text color={P.muted} size="caption">+ {D.tasks.length - 7} more</Text> : null}
+        {D.tasks.length > maxRows ? <Text color={P.muted} size="caption">+ {D.tasks.length - maxRows} more</Text> : null}
         {D.timeErr ? <Text color={P.amber} size="caption">Timers: {D.timeErr}</Text> : null}
       </Box>
     ))
 
-    // ---- comms (one line, key 4 expands)
+    // ---- comms: one line on the narrow layout (key 4 expands), always open on the others
     const catCount = (nn: string) => { const c = D.cats[nn]; return c === undefined ? '…' : c === null ? '—' : `${c.n}${c.more ? '+' : ''}` }
     const line = `Outlook ${dash(D.unread)} · Teams NOT WIRED · ${catCount('01')} follow up · ${catCount('03')} waiting`
     const catBox = (nn: string, name: string, i: number, big: boolean) => (
@@ -532,10 +642,9 @@ export const register: Register = on => {
         <Text color={P.muted} size="caption">{name}</Text>
       </Box>
     )
-    const comms = panel('comms', 'COMMS', (
-      <Button key="k-4" label={open.comms ? '‹ 4 Collapse' : '› 4 Expand'} hotkey="4" onPress={() => { open.comms = !open.comms; $.ui.invalidate('ui.render') }} />
-    ), (
-      open.comms ? (
+    const commsOpen = layout !== 'narrow' || open.comms
+    const comms = panel('comms', 'COMMS', layout === 'narrow' ? toggle('4', 'comms') : <Text color={P.muted} size="caption">OUTLOOK · TEAMS</Text>, (
+      commsOpen ? (
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" gap={2} flexWrap="wrap">
             <Text color={P.ink} size="footnote">Outlook unread <Text color={P.ink} weight="bold" tabular>{dash(D.unread)}</Text></Text>
@@ -563,44 +672,93 @@ export const register: Register = on => {
           {gaugeBox('stale', D.stale, 60, 20, 40, 'Stale notes')}
           {gaugeBox('over', D.overdue, 10, 2, 9, 'Overdue ClickUp', D.overdueMore)}
         </Box>
+        {D.tasksErr && D.tasksOkAt ? <Text color={P.muted} size="caption">Overdue is from the saved copy.</Text> : null}
         {D.vaultErr ? <Text color={P.amber} size="caption">Vault: {D.vaultErr.slice(0, 140)}</Text> : null}
       </Box>
     ))
 
-    // ---- monitoring and second brain, folded
-    const mon = panel('mon', 'MONITORING', (
-      <Button key="k-6" label={open.monitoring ? '‹ 6 Collapse' : '› 6 Expand'} hotkey="6" onPress={() => { open.monitoring = !open.monitoring; $.ui.invalidate('ui.render') }} />
-    ), open.monitoring ? (
-      <Box flexDirection="column" gap={1}>
-        {AREAS.map(a => (
-          <Box key={a} flexDirection="row" justifyContent="space-between" gap={1}>
-            <Text color={P.ink} size="footnote">{a}</Text>
-            <Text color={P.muted} size="caption" weight="bold">{/Grafana/.test(a) ? 'NOT WIRED' : '—'}</Text>
+    // ---- monitoring: folded row on the narrow layout, a card strip on the others
+    const cardPx = layout === 'wide' ? 300 : 240
+    const strip = (() => {
+      const ac = CARDS[monActive]!
+      const art = (c: typeof ac, i: number, w: number, hgt: number) => (Svg ? <Svg source={artSvg(c.art, w, hgt, i + 1, c.wired ? P.accent : P.muted, c.wired ? 1 : 0.55)} alt={`${c.name} art`} width={w} height={hgt} /> : null)
+      const others = CARDS.map((c, i) => ({ c, i })).filter(x => x.i !== monActive)
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="row" gap={1} alignItems="stretch">
+            <Box flexDirection="column" borderStyle="single" borderColor={P.accent} backgroundColor={P.panel} padding={1} gap={1} width={Math.floor(cardPx / 7.5)}>
+              {art(ac, monActive, cardPx - 24, 70)}
+              <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+                <Text color={ac.wired ? P.accent : P.muted} size="caption" weight="bold">{ac.wired ? 'ON THE BOARD' : 'NOT WIRED'}</Text>
+                {ac.legacy ? <Text color={P.amber} size="caption" weight="bold">LEGACY VIEW</Text> : null}
+              </Box>
+              <Text color={P.ink} size="body" weight="semibold">{ac.name}</Text>
+              <Text color={P.muted} size="footnote">{ac.line}</Text>
+              <Text color={P.muted} size="footnote" tabular>Figures —</Text>
+              {ac.wired ? <Link href={BOARD} label="Open on the board ↗" /> : <Text color={P.muted} size="caption">Dimmed until a source is connected.</Text>}
+            </Box>
+            <Box flexDirection="row" gap={1} flexGrow={1} flexWrap="wrap">
+              {others.map(({ c, i }) => Svg ? <Svg key={c.name} source={vtitleSvg(c.name, c.wired ? P.ink : P.muted, c.wired ? 1 : 0.55)} alt={c.name} width={30} height={140} /> : null)}
+            </Box>
           </Box>
-        ))}
-        <Text color={P.muted} size="caption">Pages inside the board: {BOARD_PAGES.join(' · ')}</Text>
-        <Link href={BOARD} label="Open the Bridge board ↗" />
-      </Box>
-    ) : (
-      <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
-        <Text color={P.ink} size="footnote">{AREAS.length} areas · no figures wired yet · Fleet NOT WIRED</Text>
-        <Link href={BOARD} label="Bridge board ↗" />
-      </Box>
-    ))
-    const brain = panel('brain', 'SECOND BRAIN', (
-      <Button key="k-7" label={open.brain ? '‹ 7 Collapse' : '› 7 Expand'} hotkey="7" onPress={() => { open.brain = !open.brain; $.ui.invalidate('ui.render') }} />
-    ), open.brain ? (
-      <Box flexDirection="column" gap={1}>
-        <Text color={P.ink} size="footnote">Stale notes {dash(D.stale)} · 01-Inbox files {dash(D.inbox)}</Text>
-        <Text color={P.muted} size="caption">Search and recent notes arrive in phase 2. The vault lives in Cortex on the board.</Text>
-        <Link href={BOARD} label="Cortex on the Bridge board ↗" />
-      </Box>
-    ) : (
-      <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
-        <Text color={P.ink} size="footnote">stale {dash(D.stale)} · inbox {dash(D.inbox)}</Text>
-        <Link href={BOARD} label="Cortex ↗" />
-      </Box>
-    ))
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Button key="k-a" label="‹ Prev" hotkey="a" onPress={() => { monActive = (monActive + CARDS.length - 1) % CARDS.length; $.ui.invalidate('ui.render') }} />
+            <Button key="k-d" label="Next ›" hotkey="d" onPress={() => { monActive = (monActive + 1) % CARDS.length; $.ui.invalidate('ui.render') }} />
+            <Text color={P.muted} size="caption">{monActive + 1} of {CARDS.length} · pages inside the board: {BOARD_PAGES.join(' · ')}</Text>
+          </Box>
+        </Box>
+      )
+    })()
+    const mon = layout === 'narrow'
+      ? panel('mon', 'MONITORING', toggle('6', 'monitoring'), open.monitoring ? (
+        <Box flexDirection="column" gap={1}>
+          {CARDS.map(a => (
+            <Box key={a.name} flexDirection="row" justifyContent="space-between" gap={1}>
+              <Text color={P.ink} size="footnote">{a.name}</Text>
+              <Text color={P.muted} size="caption" weight="bold">{a.wired ? (a.legacy ? 'LEGACY VIEW' : '—') : 'NOT WIRED'}</Text>
+            </Box>
+          ))}
+          <Text color={P.muted} size="caption">Pages inside the board: {BOARD_PAGES.join(' · ')}</Text>
+          <Link href={BOARD} label="Open the Bridge board ↗" />
+        </Box>
+      ) : (
+        <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
+          <Text color={P.ink} size="footnote">{CARDS.length} areas · no figures wired yet · Fleet NOT WIRED</Text>
+          <Link href={BOARD} label="Bridge board ↗" />
+        </Box>
+      ))
+      : panel('mon', 'MONITORING', <Text color={P.muted} size="caption">{CARDS.length} areas · not wired last</Text>, strip)
+
+    // ---- second brain: folded row on the narrow layout, a vault panel on the others
+    const q = brainQuery.trim().toLowerCase()
+    const found = (q ? vaultIndex.filter(n => n.name.toLowerCase().includes(q) || n.rel.toLowerCase().includes(q)) : [...vaultIndex].sort((a, b) => b.mtime - a.mtime)).slice(0, 6)
+    const brain = layout === 'narrow'
+      ? panel('brain', 'SECOND BRAIN', toggle('7', 'brain'), open.brain ? (
+        <Box flexDirection="column" gap={1}>
+          <Text color={P.ink} size="footnote">Stale notes {dash(D.stale)} · 01-Inbox files {dash(D.inbox)}</Text>
+          <Text color={P.muted} size="caption">Search and recent notes show on the wider layouts.</Text>
+          <Link href={BOARD} label="Cortex on the Bridge board ↗" />
+        </Box>
+      ) : (
+        <Box flexDirection="row" gap={2} alignItems="center" flexWrap="wrap">
+          <Text color={P.ink} size="footnote">stale {dash(D.stale)} · inbox {dash(D.inbox)}</Text>
+          <Link href={BOARD} label="Cortex ↗" />
+        </Box>
+      ))
+      : panel('brain', 'SECOND BRAIN', <Link href={BOARD} label="Open second brain ↗" />, (
+        <Box flexDirection="column" gap={1}>
+          <Text color={P.ink} size="footnote" tabular>Stale notes {dash(D.stale)} · 01-Inbox files {dash(D.inbox)} · {vaultIndex.length} notes indexed</Text>
+          {Input ? <Input key="brain-q" placeholder="Search note names ( / not a hotkey )" value={brainQuery} onInput={(t: string) => { brainQuery = t; $.ui.invalidate('ui.render') }} onSubmit={() => {}} submitLabel="Search" /> : null}
+          <Text color={P.muted} size="caption">{q ? `${found.length} match${found.length === 1 ? '' : 'es'}` : 'RECENT NOTES'}</Text>
+          {found.map(n => (
+            <Box key={n.rel} flexDirection="column" gap={0}>
+              <Text color={P.ink} size="footnote">{n.name.replace(/\.md$/, '')}</Text>
+              <Text color={P.muted} size="caption">{n.rel}</Text>
+            </Box>
+          ))}
+          {!found.length ? <Text color={P.muted} size="footnote">{vaultIndex.length ? 'No notes match.' : 'The vault index is not loaded yet.'}</Text> : null}
+        </Box>
+      ))
 
     // ---- capture
     const cap = panel('cap', 'CAPTURE → 01-INBOX', capNote ? <Text color={capNote.startsWith('Failed') ? P.amber : P.ok} size="caption">{capNote}</Text> : <Text color={P.muted} size="caption"> </Text>, (
@@ -609,29 +767,64 @@ export const register: Register = on => {
       </Box>
     ))
 
+    // ---- log (medium and wide)
+    const logPanel = panel('log', 'LOG', <Text color={P.muted} size="caption">{logLines.length} events</Text>, (
+      <Box flexDirection="column" gap={0}>
+        {!logLines.length ? <Text color={P.muted} size="footnote">Nothing yet this session.</Text> : null}
+        {logLines.slice(-12).map((l, i, arr) => (
+          <Box key={`${l.t}-${i}`} flexDirection="row" gap={1}>
+            <Text color={P.muted} size="footnote" tabular>{l.t}</Text>
+            <Text color={l.warn ? P.amber : i === arr.length - 1 ? P.ink : P.muted} size="footnote">{l.m}</Text>
+          </Box>
+        ))}
+      </Box>
+    ))
+
     const last = logLines[logLines.length - 1]
     const foot = (
       <Box key="foot" flexDirection="column" gap={0}>
-        {last ? <Text color={last.warn ? P.amber : P.muted} size="caption">{last.t} · {last.m}</Text> : null}
-        <Text color={P.muted} size="caption">ClickUp calls today from this pane: {D.cuCalls} · tasks {D.tasksOkAt ? hhmm(new Date(D.tasksOkAt)) : '—'} · timers {D.trackedOkAt ? hhmm(new Date(D.trackedOkAt)) : '—'} · refresh polls every 15 min (R forces)</Text>
+        {layout === 'narrow' && last ? <Text color={last.warn ? P.amber : P.muted} size="caption">{last.t} · {last.m}</Text> : null}
+        <Text color={P.muted} size="caption">ClickUp calls today from this pane: {D.cuCalls} · tasks {D.tasksOkAt ? hhmm(new Date(D.tasksOkAt)) : '—'} · timers {D.trackedOkAt ? hhmm(new Date(D.trackedOkAt)) : '—'} · polls: tasks 15 min, timer 2, entries 10 (R forces)</Text>
         {D.perm['clickup_get_time_entries'] ? <Text color={P.amber} size="caption">Add to permissions.allow: {D.perm['clickup_get_time_entries']}</Text> : null}
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Text color={P.muted} size="caption">M morning · E evening · W week · R refresh · C collapse · 4 comms · 6 monitoring · 7 brain ·</Text>
+        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Text color={P.muted} size="caption">M morning · E evening · W week · R refresh · C collapse · {layout === 'narrow' ? '4 comms · 6 monitoring · 7 brain' : 'A / D cards'} ·</Text>
           {hk('t', P === DAY ? 'Theme: daylight' : 'Theme: dark', () => { P = P === DAY ? DARK : DAY; ringCache.key = ''; void $.store.set('theme', P === DAY ? 'light' : 'dark') })}
         </Box>
       </Box>
     )
 
+    // ---- assemble
+    const colW = (share: number) => Math.max(24, Math.floor((bc - 4) * share) - 1)
+    let body: any
+    if (layout === 'wide') {
+      body = (
+        <Box flexDirection="column" gap={1}>
+          {timeline}
+          <Box flexDirection="row" gap={1} alignItems="flex-start">
+            <Box flexDirection="column" gap={1} width={colW(0.3)}>{timerRow}{focus}{cap}{brain}</Box>
+            <Box flexDirection="column" gap={1} width={colW(0.4)}>{clock_}{mon}</Box>
+            <Box flexDirection="column" gap={1} width={colW(0.3)}>{comms}{radar}{logPanel}</Box>
+          </Box>
+        </Box>
+      )
+    } else if (layout === 'medium') {
+      body = (
+        <Box flexDirection="row" gap={1} alignItems="flex-start">
+          <Box flexDirection="column" gap={1} width={colW(0.5)}>{next_}{timerRow}{focus}{cap}</Box>
+          <Box flexDirection="column" gap={1} width={colW(0.5)}>{comms}{radar}{brain}{mon}{logPanel}</Box>
+        </Box>
+      )
+    } else {
+      body = (
+        <Box flexDirection="column" gap={1}>
+          {next_}{focus}{comms}{radar}{mon}{brain}{cap}
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column" gap={1} padding={1} backgroundColor={P.field}>
         {masthead}
-        {next_}
-        {focus}
-        {comms}
-        {radar}
-        {mon}
-        {brain}
-        {cap}
+        {body}
         {foot}
       </Box>
     )

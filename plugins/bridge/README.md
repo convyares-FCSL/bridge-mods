@@ -31,3 +31,12 @@ Microsoft 365 server: `outlook_calendar_search`, `outlook_email_search`, `read_r
 - One capture control (Enter files it). Monitoring and Second brain link to the Bridge board (https://claude.ai/artifact/Xmi8Zam4rQdaYutpmBkbjT); Cortex, Team, Infrastructure, Projects, Products and Registers are pages inside it.
 - Joins use keys: ClickUp user 80462914, four-digit project codes.
 - The pane uses letters and digits only, never Space, so it can run beside the board's Space-to-expand.
+
+## v0.3.0 (phase 2): three layouts
+
+The layout follows the pane width in columns: narrow under 90 (one column), medium 90–150 (two), wide over 150 (three). Drawings change size only at a breakpoint.
+
+- Medium: left next meeting, timer, Focus (8 rows), capture. Right Comms, Radar, Second brain panel (stale, inbox, search over note names, recent notes), Monitoring strip, Log.
+- Wide: the timeline across the top (06:00–20:00, SMIL now marker), then left timer, Focus (10 rows), capture, Second brain; centre the day clock with the Monitoring strip beneath; right Comms, Radar, Log.
+- Monitoring strip: an active card (art, status, title, link to the board, LEGACY VIEW tag on Engineering overview and ECR tracker) and narrow strips whose titles are drawn as SVG text. A and D move between cards. Fleet (Grafana) is NOT WIRED and dimmed. No figures are drawn: cards show —.
+- The day clock and timeline use today's Outlook meetings only; there are no focus or school arcs because there is no source for them.
